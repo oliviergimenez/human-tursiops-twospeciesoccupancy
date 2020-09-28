@@ -1,0 +1,194 @@
+---
+title: "Analyses co-occurrence grand dauphin et activités humaines"
+author: "Olivier Gimenez"
+date: "28/09/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+theme_set(theme_light())
+library(lubridate)
+library(janitor)
+library(sf)
+```
+
+## Lecture et nettoyage des données
+
+La grille.
+```{r}
+grid <- st_read("Grid/grid.shp")
+grid %>%
+  ggplot() +
+  geom_sf()
+```
+
+
+Les dauphins. 
+```{r}
+load("20180914_SAMM_data_LauretValentin.RData")
+```
+
+Données été et hiver.
+```{r}
+dauphins_summer <- summer
+dauphins_winter <- winter
+```
+
+Explorons les observations.
+```{r}
+dauphins_summer$obsdata %>%
+  as_tibble() %>%
+  clean_names()
+```
+
+
+```{r}
+transect_summer <- dauphins_summer$segdata %>%
+grid %>%
+  ggplot() +
+  geom_sf()  + 
+  geom_line(data = , color = "red",
+            aes(x = longitude, y = latitude, group = Transect.Label)) + 
+  coord_sf(xlim = st_bbox(grid)[c(1,3)],
+                  ylim = st_bbox(grid)[c(2,4)])
+dauphins_summer$segdata %>%
+ggplot() +
+  aes(x = longitude, y = latitude, group = Transect.Label) + 
+  geom_sf(data = st_as_sf(World) %>% select(ID2)) + 
+  coord_cartesian(xlim = as.numeric(bbox(med_poly)[1, ]),
+                  ylim = as.numeric(bbox(med_poly)[2, ])
+                  ) + 
+  geom_line() + 
+  xlab("Eastings") + ylab("Northings") +
+  geom_point(data = subset(summer$segdata, n != 0),
+             aes(x = X, y = Y, size = n/Effort), color = "red", alpha = 0.6) +
+  scale_size(breaks = c(0:3), labels = c(0:3), 
+             limits = c(0.0, 3.0), name = "Obs/km", 
+             guide = "legend"
+             ) +
+  scale_x_continuous(breaks = as.numeric(bbox(med_poly)[1, ])) +
+  scale_y_continuous(breaks = as.numeric(bbox(med_poly)[2, ])) +                       
+  theme(legend.position = "right", 
+        legend.key.width = unit(2, "cm"),
+        plot.title = element_text(lineheight = 0.8, face = "bold"), 
+        axis.text = element_text(size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank()
+        )
+```
+
+
+
+
+Les activités.
+```{r}
+load("20200928_SAMM_data_Pressure.RData")
+```
+
+
+
+
+```{r}
+ggplot(data = summer$segdata, 
+                      aes(x = X, y = Y, group = Transect.Label)
+                      ) + 
+  geom_sf(data = World, region = "ID2"),
+               aes(x = long, y = lat, group = group),
+               fill = grey(0.9), color = grey(0.0), size = 0.5
+               ) + 
+  coord_cartesian(xlim = as.numeric(bbox(med_poly)[1, ]),
+                  ylim = as.numeric(bbox(med_poly)[2, ])
+                  ) + 
+  geom_line() + 
+  xlab("Eastings") + ylab("Northings") +
+  geom_point(data = subset(summer$segdata, n != 0),
+             aes(x = X, y = Y, size = n/Effort), color = "red", alpha = 0.6) +
+  scale_size(breaks = c(0:3), labels = c(0:3), 
+             limits = c(0.0, 3.0), name = "Obs/km", 
+             guide = "legend"
+             ) +
+  scale_x_continuous(breaks = as.numeric(bbox(med_poly)[1, ])) +
+  scale_y_continuous(breaks = as.numeric(bbox(med_poly)[2, ])) +                       
+  theme(legend.position = "right", 
+        legend.key.width = unit(2, "cm"),
+        plot.title = element_text(lineheight = 0.8, face = "bold"), 
+        axis.text = element_text(size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank()
+        )
+
+### pod size
+theme_set(theme_bw(base_size = 24))
+ggplot(summer$obsdata,
+       aes(x = size)
+       ) +
+  geom_histogram(binwidth = 1) + ggtitle("Grand Dauphin - Et?") + xlab("Pod Size") +
+  scale_y_sqrt(breaks = c(0, 1, 10, 50, 100, 200)) +
+  theme(legend.position = "right", 
+        legend.key.width = unit(2, "cm"),
+        plot.title = element_text(lineheight = 0.8, face = "bold"), 
+        axis.text = element_text(size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank()
+        )
+
+### hiver
+### repr?sentation de l'effort d'?chantillonage
+theme_set(theme_bw(base_size = 24))
+ggplot(data = winter$segdata, 
+                      aes(x = X, y = Y, group = Transect.Label)
+                      ) + 
+  geom_polygon(data = tidy(World, region = "ID2"),
+               aes(x = long, y = lat, group = group),
+               fill = grey(0.9), color = grey(0.0), size = 0.5
+               ) + 
+  coord_cartesian(xlim = as.numeric(bbox(med_poly)[1, ]),
+                  ylim = as.numeric(bbox(med_poly)[2, ])
+                  ) + 
+  geom_line() + 
+  xlab("Eastings") + ylab("Northings") +
+  geom_point(data = subset(winter$segdata, n != 0),
+             aes(x = X, y = Y, size = n/Effort), color = "red", alpha = 0.6) +
+  scale_size(breaks = c(0:3), labels = c(0:3), 
+             limits = c(0.0, 3.0), name = "Obs/km", 
+             guide = "legend"
+             ) +
+  scale_x_continuous(breaks = as.numeric(bbox(med_poly)[1, ])) +
+  scale_y_continuous(breaks = as.numeric(bbox(med_poly)[2, ])) +                       
+  theme(legend.position = "right", 
+        legend.key.width = unit(2, "cm"),
+        plot.title = element_text(lineheight = 0.8, face = "bold"), 
+        axis.text = element_text(size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank()
+        )
+
+### pod size
+theme_set(theme_bw(base_size = 24))
+ggplot(winter$obsdata,
+       aes(x = size)
+       ) +
+  geom_histogram(binwidth = 1) + ggtitle("Grand Dauphin - Hiver") + xlab("Pod Size") +
+  scale_y_sqrt(breaks = c(0, 1, 10, 50, 100, 200)) +
+  theme(legend.position = "right", 
+        legend.key.width = unit(2, "cm"),
+        plot.title = element_text(lineheight = 0.8, face = "bold"), 
+        axis.text = element_text(size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank()
+        )
+
+### fit detection function
+detfc.hn.null <- ds(winter$distdata, key = "hn", adjustment = NULL)
+summary(detfc.hn.null)
+plot(detfc.hn.null, las = 1, xlab = "distance perpendiculaire (km)")
+
+```
+
