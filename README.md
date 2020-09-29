@@ -18,4 +18,12 @@ Ces fichiers n'ont pas de filtres, donc il y toutes les observations des grands 
 
 Il y a 6 listes de 2 dataframes chacune. Le df intéressant est le obsdata avec la colonne Sample.Label pour faire la 
 jointure avec les données envoyées précédemment, la colonne 'what' pour  un descriptif de la détection, et les coordonnées exactes de la détection.
+* winter_recreationalboating
+* summer_recreationalboating
+* winter_fishingactivities
+* summer_fishingactivities
 
+
+Il y a une colonne 'what' dans les tables $obsdata qui donne un descriptif du type d'objet vu. Cette fois-ci il y a plusieurs type d'objets possible 
+donc je n'ai pas aggréger cela à l'échelle d'un segment, mais c'est normalement aisé à faire avec un left_join sur le champ Sample.Label 
+avec la table segdata des TURTRU.
