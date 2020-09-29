@@ -159,13 +159,17 @@ activ_winter <- transect %>%
   add_column(season = "winter") %>%
   select(date, eastings, northings, dolphins, effort, peche, season, id, transect)
   
-#summer_fishingactivities$obsdata %>%
-#  st_as_sf()
-#  st_transform( crs= st_crs(grid))
-
 activ <- bind_rows(activ_summer, activ_winter)
 ```
 
+Quelques statistiques, avec le nombre d'activités par transect.
+```{r}
+activ %>%
+  group_by(transect, season) %>%
+  summarise(n_peche = sum(peche)) %>%
+  filter(n_peche>0) %>%
+  arrange(desc(n_peche))
+```
 
 Visualisation.
 ```{r}
@@ -182,3 +186,99 @@ grid %>%
   facet_wrap(~season, ncol = 1) +
   labs(title = "fishing activities")
 ```
+
+## Construction des chroniques de détection/non-détections des sites
+
+Get transects and grid in same coordinates system.
+```{r}
+transect_line <- activ %>%
+  mutate(month = month(date)) %>%
+  select(eastings, northings, date, dolphins, peche, season, id, transect, month) %>%
+  as.data.frame() %>%
+  st_as_sf(coords = c("eastings", "northings"), 
+           crs = "+proj=longlat +init=EPSG:3035")
+
+st_crs(grid) <- "+proj=longlat +init=EPSG:3035"
+```
+
+Intersect the grid and the transects.
+```{r}
+int <- transect_line %>%
+  st_intersection(grid)
+```
+
+
+
+Select those cells which intersect with the transects.
+```{r}
+all_df <- grid %>%
+  filter(objectid %in% int$objectid) %>%
+  st_join(int %>% mutate(peche = as_factor(peche),
+                         dolphins = as_factor(dolphins))) %>%
+  mutate(month = as_factor(month),
+         month = fct_relevel(month, c("11", "12", "1", "2", "5", "6", "7", "8")))
+```
+
+Fishing activities per month.
+```{r}
+all_df %>%
+  ggplot() +
+  geom_sf(lwd = 0.1, color = "black", aes(fill = peche))  + 
+  coord_sf(xlim = st_bbox(grid)[c(1,3)],
+           ylim = st_bbox(grid)[c(2,4)]) +
+  scale_fill_manual(values = c('gray90','steelblue4'),
+                    name = "fishing activites",
+                    labels = c("absent", "present")) +
+  facet_wrap(~month, ncol = 4)
+```
+
+Dolphin presence per month.
+```{r}
+all_df %>%
+  ggplot() +
+  geom_sf(lwd = 0.1, color = "black", aes(fill = dolphins))  + 
+  coord_sf(xlim = st_bbox(grid)[c(1,3)],
+           ylim = st_bbox(grid)[c(2,4)]) +
+  scale_fill_manual(values = c('gray90','steelblue4'),
+                    name = "dolphin observations",
+                    labels = c("non-detected", "detected")) +
+  facet_wrap(~month, ncol = 4)
+```
+
+We have everything to build the cells detection-non/detection histories. Basically, the grey cells are gonna be 0's, the blue cells 1's and those cells that are not sampled in a month NA's. 
+```{r}
+all_df %>%
+  add_count(transect, wt = as.numeric(dolphins)) %>%
+  complete(transect) %>%
+  mutate(tursiops = case_when(
+  n == 1 ~ "NA",
+  n == 2 ~ "non-detected",
+  n > 2 ~ "detected"),
+  tursiops = as_factor(tursiops)) %>%
+  select(transect, dolphins, n, tursiops)
+  
+
+
+#  head() %>%
+#  mutate(occ1 = if_else(month == "11" | ))
+#  pivot_wider(c(date, season), 
+#              values_from = dolphins, 
+#              names_from = month)
+  
+  
+  
+  
+  
+    # 
+    # mutate(dolphins = fct_recode(dolphins, "ND" = "0", "D" = "1"),
+    #      month = fct_recode(month, 
+    #                         "dec" = "12", 
+    #                         "nov" = "11",  
+    #                         "jan" = "1", 
+    #                         "feb" = "2", 
+    #                         "may" = "5", 
+    #                         "jun" = "6", 
+    #                         "jul" = "7", 
+    #                         "aug"=  "8")) %>%
+```
+
