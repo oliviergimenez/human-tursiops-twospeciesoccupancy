@@ -282,3 +282,203 @@ all_df %>%
     #                         "aug"=  "8")) %>%
 ```
 
+Build occupancy data. 
+```{r}
+occupancy_df <- all_df %>% 
+  mutate(dolphins = as.numeric(dolphins),
+         peche = as.numeric(peche)) %>%
+  group_by(transect, month) %>%
+  summarise(dolphins = sum(dolphins),
+            fishing = sum(peche)) %>%
+  mutate(obs = case_when(
+  dolphins == 1 && fishing == 1 ~ "NA",
+  dolphins == 1 && fishing == 2 ~ "NA and fishing non-detected",
+  dolphins == 2 && fishing == 1 ~ "dolphin non-detected and NA",
+  dolphins == 1 && fishing > 2 ~ "NA and fishing detected",
+  dolphins > 2 && fishing == 1 ~ "dolphin detected and NA",
+  dolphins == 2 && fishing == 2 ~ "dolphin and fishing non-detected",
+  dolphins > 2 && fishing == 2 ~ "dolphin detected and fishing non-detected",
+  dolphins == 2 && fishing > 2 ~ "dolphin non-detected and fishing detected",
+  dolphins > 2 && fishing > 2 ~ "dolphin and fishing detected"),
+  obs = as_factor(obs)) %>%
+  ungroup() %>%
+  select(transect, obs, month)
+```
+
+
+Some checks. I am not sure we can have NA and fishing (non-)detected or dolphin (non-)detected and NA, either a cell is sampled whatever the detection/non-detection, or it is not. 
+```{r}
+occupancy_df %>%
+  count(obs)
+```
+
+
+Rebuild occupancy data. 
+```{r}
+occupancy_df <- all_df %>% 
+  mutate(dolphins = as.numeric(dolphins),
+         peche = as.numeric(peche)) %>%
+  group_by(transect, month) %>%
+  summarise(dolphins = sum(dolphins),
+            fishing = sum(peche)) %>%
+  mutate(obs = case_when(
+  dolphins == 1 && fishing == 1 ~ "NA",
+  dolphins == 1 && fishing == 2 ~ "dolphin non-detected and fishing non-detected",
+  dolphins == 2 && fishing == 1 ~ "dolphin non-detected and fishing non-detected",
+  dolphins == 1 && fishing > 2 ~ "dolphin non-detected and fishing detected",
+  dolphins > 2 && fishing == 1 ~ "dolphin detected and fishing non-detected",
+  dolphins == 2 && fishing == 2 ~ "dolphin and fishing non-detected",
+  dolphins > 2 && fishing == 2 ~ "dolphin detected and fishing non-detected",
+  dolphins == 2 && fishing > 2 ~ "dolphin non-detected and fishing detected",
+  dolphins > 2 && fishing > 2 ~ "dolphin and fishing detected"),
+  obs = as_factor(obs)) %>%
+  ungroup() %>%
+  select(transect, obs, month)
+```
+
+```{r}
+occupancy_df %>%
+  count(obs)
+```
+
+Format the dolphin detections/non-detections for further analyses. 
+```{r}
+dolphin_df <- occupancy_df %>%
+  as_tibble() %>%
+  select(transect, obs, month) %>%
+  mutate(obs = case_when(
+  is.na(obs) ~ "NA",
+  obs == "dolphin non-detected and fishing non-detected" ~ "0",
+  obs == "dolphin non-detected and fishing detected" ~ "0",
+  obs == "dolphin detected and fishing non-detected" ~ "1",
+  obs == "dolphin and fishing non-detected" ~ "0",
+  obs == "dolphin and fishing detected" ~ "1")) %>%
+  pivot_wider(names_from = month, values_from = obs)
+dolphin_df
+```
+
+Format the fishing activities detections/non-detections for further analyses. 
+```{r}
+fishing_df <- occupancy_df %>%
+  as_tibble() %>%
+  select(transect, obs, month) %>%
+  mutate(obs = case_when(
+  is.na(obs) ~ "NA",
+  obs == "dolphin non-detected and fishing non-detected" ~ "0",
+  obs == "dolphin non-detected and fishing detected" ~ "1",
+  obs == "dolphin detected and fishing non-detected" ~ "0",
+  obs == "dolphin and fishing non-detected" ~ "0",
+  obs == "dolphin and fishing detected" ~ "1")) %>%
+  pivot_wider(names_from = month, values_from = obs)
+fishing_df
+```
+Put everything together.
+```{r}
+y_dolphin <- dolphin_df %>% 
+  select(-transect) %>% 
+  mutate_if(is.character, as.numeric) %>% 
+  as.matrix()
+ind_dolphin <- apply(y_dolphin, 1, function(x) all(is.na(x)))
+y_dolphin <- y_dolphin[ !ind_dolphin, ]
+
+y_fishing <- fishing_df %>% 
+  select(-transect) %>% 
+  mutate_if(is.character, as.numeric) %>% 
+  as.matrix()
+ind_fishing <- apply(y_fishing, 1, function(x) all(is.na(x)))
+y_fishing <- y_fishing[ !ind_fishing, ]
+
+y <- list(y_dolphin, y_fishing)
+names(y) <- c('dolphin','fishing')
+```
+
+
+## Two-species occupancy analysis
+
+Load `unmarked` awesome package. 
+```{r}
+library(unmarked)
+```
+
+Get help on the analysis.
+```{r}
+?unmarked::occuMulti
+```
+
+I wrote a tutorial some time ago that might be useful, check out [here](https://github.com/oliviergimenez/2speciesoccupancy). 
+
+Format data.
+```{r}
+data <- unmarkedFrameOccuMulti(y = y) #,siteCovs=occ_covs,obsCovs=det_covs)
+```
+
+Summary stats.
+```{r}
+summary(data)
+```
+
+Visualize.
+```{r}
+plot(data)
+```
+
+Specific effects on parameters. 
+```{r}
+occFormulas <- c('~1','~1','~1') 
+detFormulas <- c('~1','~1')
+```
+
+Fit model. 
+```{r}
+fit <- occuMulti(detFormulas, occFormulas, data)
+```
+
+Look at output
+```{r}
+fit
+```
+
+
+Get the natural parameter and detection estimates:
+```{r}
+mle <- fit@opt$par
+names(mle) <- c('f1','f2','f12','lp1','lp2')
+mle
+```
+
+Get the occupancy estimates:
+```{r}
+den <- 1 + exp(mle['f1'])+exp(mle['f2'])+exp(mle['f1']+mle['f2']+mle['f12'])
+(psi11hat <- exp(mle['f1']+mle['f2']+mle['f12'])/den)
+(psi10hat <- exp(mle['f1'])/den)
+(psi01hat <- exp(mle['f2'])/den)
+```
+
+I do it by hand to understand how `unmarked` works. The easy way is to use `predict(fit,'state')`.
+
+Get the detection estimates:
+```{r}
+(p1hat <- plogis(mle['lp1']))
+(p2hat <- plogis(mle['lp2']))
+```
+
+Again I do it by hand, but `unmarked` can do it for you with `predict(fit,'det')`.
+
+If we just want to get the parameter estimates directly:
+```{r}
+# detection
+predict(fit,'det',species=1)[1,]
+predict(fit,'det',species=2)[1,]
+
+# marginal occupancy
+predict(fit,'state',species=1)[1,]
+predict(fit,'state',species=2)[1,]
+
+# conditional occupancy
+predict(fit,'state',species=1,cond='fishing')[1,] # species 1 | species 2 present
+predict(fit,'state',species=1,cond='-fishing')[1,] # species 1 | species 2 absent
+predict(fit,'state',species=2,cond='dolphin')[1,] # species 2 | species 1 present
+predict(fit,'state',species=2,cond='-dolphin')[1,] # species 2 | species 1 absent
+```
+
+
