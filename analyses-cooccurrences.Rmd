@@ -30,13 +30,17 @@ grid %>%
 
 Les dauphins. 
 ```{r}
-load("20180914_SAMM_data_LauretValentin.RData")
+load("20180914_SAMM_data_LauretValentin.RData") # Extration recente de Matthieu
+
 ```
 
 Les données été et hiver.
 ```{r}
 dauphins_summer <- summer
 dauphins_winter <- winter
+obs <- bind_rows(winter$obsdata, summer$obsdata)
+head(obs)
+sum(obs$size)
 ```
 
 Les données transect uniquement.
@@ -64,8 +68,11 @@ transect_winter <- dauphins_winter$segdata %>%
   add_column(season = "winter")
 
 transect <- bind_rows(transect_summer, transect_winter)
+sum(transect$counts)
+head(transect)
 ```
 
+VL. Il y a points par transects
 Quelques statistiques, avec le nombre de détections par transect.
 ```{r}
 transect %>%
@@ -73,6 +80,7 @@ transect %>%
 ```
 
 Le nombre total de dauphins.
+VL: Pour moi, ça ne représente pas le nombre de dauphins mais le nombre de detections.
 ```{r}
 transect %>%
   count(transect, wt = counts, sort = TRUE) %>%
@@ -84,7 +92,7 @@ transect %>%
 Et l'effort par transect.
 ```{r}
 transect %>%
-  group_by(transect) %>%
+  group_by(id) %>%
   summarise(nb_detections = sum(counts),
             effort_total = mean(effort)) %>%
   arrange(desc(nb_detections))
@@ -93,7 +101,7 @@ transect %>%
 L'effort total.
 ```{r}
 transect %>%
-  group_by(transect) %>%
+  group_by(id) %>%
   summarise(effort_total = max(effort)) %>%
   select(effort_total) %>%
   sum()
@@ -119,6 +127,8 @@ grid %>%
 Les activités.
 ```{r}
 load("20200928_SAMM_data_Pressure.RData")
+fishing <-  bind_rows(summer_fishingactivities$obsdata,winter_fishingactivities$obsdata) 
+unique(fishing$what)
 ```
 
 On récupère les activités par saison en les regroupant dans une catégorie unique *pêche*. Il y a le détail : "Bouee de peche", Bateau art dormant (fileyeur, caseyeur)", "Bateau chalutier", "Bateau de peche pro", "Bateau senneur, bolincheur".
@@ -197,16 +207,19 @@ transect_line <- activ %>%
   as.data.frame() %>%
   st_as_sf(coords = c("eastings", "northings"), 
            crs = "+proj=longlat +init=EPSG:3035")
-
-st_crs(grid) <- "+proj=longlat +init=EPSG:3035"
+#st_crs(transect_line)
+grid <- st_transform(grid, st_crs(transect_line))# "+proj=longlat +init=EPSG:3035"
 ```
 
 Intersect the grid and the transects.
 ```{r}
-int <- transect_line %>%
-  st_intersection(grid)
-```
+int <- grid %>%
+  st_intersection(transect_line)
 
+dim(int)
+dim(grid)
+dim(transect_line)
+```
 
 
 Select those cells which intersect with the transects.
@@ -217,6 +230,7 @@ all_df <- grid %>%
                          dolphins = as_factor(dolphins))) %>%
   mutate(month = as_factor(month),
          month = fct_relevel(month, c("11", "12", "1", "2", "5", "6", "7", "8")))
+dim(all_df)
 ```
 
 Fishing activities per month.
