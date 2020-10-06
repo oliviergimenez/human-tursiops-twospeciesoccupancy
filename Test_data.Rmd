@@ -95,7 +95,7 @@ transect_summer <- dauphins_summer$segdata %>%
          northings = Y, 
          counts = n,
          effort = Effort,
-         id = Sample.Label) %>%
+         Sample.Label = Sample.Label) %>%
   add_column(season = "summer")
   
 transect_winter <- dauphins_winter$segdata %>%
@@ -106,7 +106,7 @@ transect_winter <- dauphins_winter$segdata %>%
          northings = Y, 
          counts = n,
          effort = Effort,
-         id = Sample.Label) %>%
+         Sample.Label = Sample.Label) %>%
   add_column(season = "winter")
 
 transect <- bind_rows(transect_summer, transect_winter)
@@ -153,7 +153,7 @@ Visualisation
 pays %>% ggplot() + geom_sf() + 
   geom_sf(data = grid[unique(int),], aes(fill = "Data occupancy"), alpha = 0.7, lwd = 0.1)+
   geom_sf(data = grid[unique(int2),], aes(fill = "Data fraiches"), alpha = 0.4, lwd = 0.1)+
-  scale_fill_manual(values = c("Data occupancy" = "blue", "Data fraiches" = "yellow"))
+  scale_fill_manual(values = c("Data occupancy" = "yellow", "Data fraiches" = "blue"))
 ```
 Il y a quelques données en plus dans le jeu 'occupancy' et un léger décalage sur certains sites...
 
@@ -161,7 +161,7 @@ Il y a quelques données en plus dans le jeu 'occupancy' et un léger décalage 
 
 Les activités humaines. On fait un `left_join` avec les tables `$segdata` correspondantes à la saison.  
 
-```{r eval=FALSE, include=FALSE}
+```{r}
 load("20200928_SAMM_data_Pressure.RData")
 
 #winter
@@ -177,6 +177,27 @@ fish_s <- left_join(transect, summer_fishingactivities$obsdata, by = "Sample.Lab
 # bind both
 fish <- bind_rows(fish_w,fish_s)
 ```
+
+Nombre de cellules avec des chalutiers 
+
+```{r}
+int_f <- fish %>% filter(what == "Bateau chalutier") %>% 
+   st_as_sf(coords = c("eastings", "northings"), crs = st_crs(grid)) %>% 
+  st_intersects(grid) %>% unlist()
+
+length(unique(int_f))
+```
+
+Visualisation
+
+```{r}
+pays %>% ggplot() + geom_sf() + 
+  geom_sf(data = grid[unique(int2),], aes(fill = "Dofin"), alpha = 0.7, lwd = 0.1)+
+  geom_sf(data = grid[unique(int_f),], aes(fill = "Chalut"), alpha = 0.5, lwd = 0.1)+
+  scale_fill_manual(values = c("Dofin" = "blue", "Chalut" = "darkred")) +
+  labs(title = "Carte de co-occurence Tursiops et chalutiers",subtitle = "Données SAMM")
+```
+
 
 ## Construction des chroniques de détection/non-détections des sites
 
