@@ -31,15 +31,20 @@ grid %>%
 Les dauphins. 
 ```{r}
 load("20180914_SAMM_data_LauretValentin.RData") # Extration recente de Matthieu
-
 ```
 
-Les données été et hiver.
+Les données été et hiver.  
+  
 ```{r}
 dauphins_summer <- summer
 dauphins_winter <- winter
+```
+
+VL.  Nombre de dauphins observés pendant l'ensemble de la campagne SAMM été + hiver. Il y a des soucis entre le nombre de dauphins dans les données `$obsdata`, le nombre de detection que l'on retrouve dans `$segdata$n`, et le nombre de detection par cellule de la grille dans la table `y_dolphin` prête pour l'occupancy.
+
+```{r}
 obs <- bind_rows(winter$obsdata, summer$obsdata)
-head(obs)
+seg <- bind_rows(winter$segdata, summer$segdata)
 sum(obs$size)
 ```
 
@@ -68,11 +73,10 @@ transect_winter <- dauphins_winter$segdata %>%
   add_column(season = "winter")
 
 transect <- bind_rows(transect_summer, transect_winter)
-sum(transect$counts)
-head(transect)
 ```
 
-VL. Il y a points par transects
+VL. La table `transect` contient 3536 lignes. J'imagine que chaque ligne correspond à un évènement géolocalisé: soit pour relver la position de l'avion, soit pour noter un élement. La colonne `id` correspond au numéro de l'évènement, la colonne `transect` correspond au transect pendant lequel l'évènement est détecté. 
+
 Quelques statistiques, avec le nombre de détections par transect.
 ```{r}
 transect %>%
@@ -88,21 +92,31 @@ transect %>%
   sum()
 ```
 
+VL. Le nombre de transect
+```{r}
+length(unique(transect$transect))
+```
+
+VL. Q. Comment on fait quand il n'y a qu'un seul point par transect ? 
 
 Et l'effort par transect.
 ```{r}
 transect %>%
-  group_by(id) %>%
+  group_by(transect) %>%
   summarise(nb_detections = sum(counts),
             effort_total = mean(effort)) %>%
   arrange(desc(nb_detections))
 ```
 
 L'effort total.
+VL. J'ai remplacé 'max(effort)' par 'sum(effort)'.  
+  * Dans le rapport SAMM final: 32213 km ont été parcourus en Med.
+  * Dans la papier de Sophie Laran: 24624 km ont été parcourus en Med.  
+  
 ```{r}
 transect %>%
-  group_by(id) %>%
-  summarise(effort_total = max(effort)) %>%
+  group_by(transect) %>%
+  summarise(effort_total = sum(effort)) %>%
   select(effort_total) %>%
   sum()
 ```
@@ -124,14 +138,15 @@ grid %>%
   facet_wrap(~season, ncol = 1)
 ```
 
-Les activités.
+Les activités humaines
 ```{r}
 load("20200928_SAMM_data_Pressure.RData")
-fishing <-  bind_rows(summer_fishingactivities$obsdata,winter_fishingactivities$obsdata) 
-unique(fishing$what)
 ```
 
 On récupère les activités par saison en les regroupant dans une catégorie unique *pêche*. Il y a le détail : "Bouee de peche", Bateau art dormant (fileyeur, caseyeur)", "Bateau chalutier", "Bateau de peche pro", "Bateau senneur, bolincheur".
+
+VL. Je rajoute "what" pour pouvoir filtrer par type d'activité.
+VL. Je pense qu'il faut faire un `left_join()` et pas un `full_join()` sinon ça duplique les évènements (cf mail de Matthieu)
 ```{r}
 activ_summer <- transect %>%
   filter(season == "summer") %>%
@@ -149,7 +164,7 @@ activ_summer <- transect %>%
          transect) %>%
   mutate(peche = if_else(!is.na(what), 1, 0)) %>%
   add_column(season = "summer") %>%
-  select(date, eastings, northings, dolphins, effort, peche, season, id, transect)
+  select(date, eastings, northings, dolphins, effort, peche, what, season, id, transect)
 
 activ_winter <- transect %>%
   filter(season == "winter") %>%
@@ -167,9 +182,13 @@ activ_winter <- transect %>%
          transect) %>%
   mutate(peche = if_else(!is.na(what), 1, 0)) %>%
   add_column(season = "winter") %>%
-  select(date, eastings, northings, dolphins, effort, peche, season, id, transect)
+  select(date, eastings, northings, dolphins, effort, peche, what, season, id, transect)
   
 activ <- bind_rows(activ_summer, activ_winter)
+dim(activ)
+# activ contient 3744 "event" (=samples)
+sum(activ$peche)
+sum(activ$dolphins)
 ```
 
 Quelques statistiques, avec le nombre d'activités par transect.
@@ -179,6 +198,17 @@ activ %>%
   summarise(n_peche = sum(peche)) %>%
   filter(n_peche>0) %>%
   arrange(desc(n_peche))
+```
+
+VL. Le nombre de transect, le même qu'avant
+```{r}
+length(unique(activ$transect))
+```
+
+VL. Le nombre d'évènement par type d'activité de peche
+```{r}
+activ %>%
+  count(what) 
 ```
 
 Visualisation.
@@ -191,34 +221,44 @@ grid %>%
   coord_sf(xlim = st_bbox(grid)[c(1,3)],
            ylim = st_bbox(grid)[c(2,4)]) +
   geom_point(data = activ %>% filter(peche > 0),
-            aes(x = eastings, y = northings), 
-             color = "red", alpha = 0.6) +
+            aes(x = eastings, y = northings, color = what), 
+            alpha = 0.6) +
   facet_wrap(~season, ncol = 1) +
   labs(title = "fishing activities")
 ```
 
+En gardant seulement les chalutiers
+```{r}
+grid %>%
+  ggplot() +
+  geom_sf(lwd = 0.1, color = "black", fill = "white")  + 
+  geom_line(data = activ, color = "blue",
+            aes(x = eastings, y = northings, group = transect)) +
+  coord_sf(xlim = st_bbox(grid)[c(1,3)],
+           ylim = st_bbox(grid)[c(2,4)]) +
+  geom_point(data = activ %>% filter(what == "Bateau chalutier"),
+            aes(x = eastings, y = northings), 
+            color = "red",alpha = 0.6) +
+  facet_wrap(~season, ncol = 1) +
+  labs(title = "Chalutier")
+```
+
 ## Construction des chroniques de détection/non-détections des sites
 
-Get transects and grid in same coordinates system.
+Ajoute le système de coordonnées
 ```{r}
 transect_line <- activ %>%
   mutate(month = month(date)) %>%
-  select(eastings, northings, date, dolphins, peche, season, id, transect, month) %>%
+  select(eastings, northings, date, dolphins, peche, what,effort, season, id, transect, month) %>%
   as.data.frame() %>%
   st_as_sf(coords = c("eastings", "northings"), 
-           crs = "+proj=longlat +init=EPSG:3035")
-#st_crs(transect_line)
-grid <- st_transform(grid, st_crs(transect_line))# "+proj=longlat +init=EPSG:3035"
+           crs = st_crs(grid))
 ```
 
-Intersect the grid and the transects.
+Intersection de la grille et des transects (résultat de même dimension que les transects)
 ```{r}
 int <- grid %>%
   st_intersection(transect_line)
-
-dim(int)
-dim(grid)
-dim(transect_line)
 ```
 
 
@@ -230,7 +270,6 @@ all_df <- grid %>%
                          dolphins = as_factor(dolphins))) %>%
   mutate(month = as_factor(month),
          month = fct_relevel(month, c("11", "12", "1", "2", "5", "6", "7", "8")))
-dim(all_df)
 ```
 
 Fishing activities per month.
@@ -319,13 +358,12 @@ occupancy_df <- all_df %>%
   select(transect, obs, month)
 ```
 
-
 Some checks. I am not sure we can have NA and fishing (non-)detected or dolphin (non-)detected and NA, either a cell is sampled whatever the detection/non-detection, or it is not. 
 ```{r}
 occupancy_df %>%
   count(obs)
 ```
-
+VL. C'est là que je comprends pas... On avait 105 detections au début du script et là on a 340 detections de dauphins.
 
 Rebuild occupancy data. 
 ```{r}
