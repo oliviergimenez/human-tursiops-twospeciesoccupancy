@@ -1,0 +1,375 @@
+---
+title: "Extraction des données SAMM et mise en forme pour un modèle d'occupancy"
+author: "Valentin Lauret"
+date: "`r format(Sys.time(), '%d/%m/%Y')`"
+output: 
+  pdf_document: default
+  html_document: default
+---
+
+Mise en forme des données SAMM pour l'étude d'occupancy multi-espèces grand dauphins - chalutiers.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, dpi = 300, cache = TRUE)
+library(tidyverse)
+theme_set(theme_light())
+library(lubridate)
+library(janitor)
+library(sf)
+library(patchwork)
+library(cowplot)
+```
+
+## Les données
+
+J'utilise les données SAMM que Matthieu a récemment envoyé pour les observations de grand dauphin et des activités de pêche. Je prends les données d'effort utilisées pour l'étude Occupancy.
+
+```{r}
+load("20180914_SAMM_data_LauretValentin.RData") # données dauphins Matthieu
+load("trSAMM.rdata") # donnees d'effort utilisées pour l'occupancy
+```
+
+### La grille d'étude
+
+La grille.
+
+```{r}
+load("pays.rdata")
+grid <- st_read("Grid/grid.shp") %>% st_transform(crs = st_crs(pays))
+grid %>%
+  ggplot() +
+  geom_sf() + 
+  geom_sf(data= pays)
+```
+
+### Les transects 
+
+Visualisation des transects par saison. 
+```{r}
+tr2 <- tr %>% mutate(season = case_when(
+  m %in% c(1,2,3) ~ "Winter",
+  m %in% c(4,5,6) ~ "Spring",
+  m %in% c(7,8,9) ~ "Summer",
+  m %in% c(10,11,12) ~ "Autumn"
+))
+
+grid %>%
+  ggplot() +
+  geom_sf(fill = "white", lwd = 0.1) + 
+  geom_sf(data= tr2, color = "darkblue")+
+  geom_sf(data= pays) + 
+  facet_wrap(~season, ncol = 2)
+```
+
+
+### Les observations de grand dauphin
+
+J'utilise la table `$segdata` en filtrant les entrées qui ont `count > 0` pour garder uniquement les lignes avec observation de dauphins.
+
+```{r}
+seg <-  bind_rows(winter$segdata, summer$segdata) %>% mutate(season = c(rep("winter", nrow(winter$segdata)),rep("summer",nrow(summer$segdata))))
+
+obs <- seg %>% filter(count > 0)
+```
+
+Nombre de dauphins observés
+
+```{r}
+obs %>% select(count) %>% sum() # 498 dauphins
+```
+
+Nombre d'observations de dauphins
+```{r}
+obs %>% nrow() # 78 observations
+```
+
+Visualisation spatiale ds detections de dauphin.
+```{r}
+
+sobs <- obs %>% st_as_sf(coords = c("X", "Y"), crs = st_crs(grid)) 
+
+grid %>% ggplot() + geom_sf(lwd = 0.1)+
+  geom_sf(data = pays) +
+  geom_sf(data = sobs, aes(color = "Dauphins")) + 
+    scale_color_manual(name = "Espèce", values = c("Dauphins" = "#0F4C5C")) +
+  labs(title = "Observations de grand dauphin", subtitle  = "Données SAMM été et hiver")
+```
+ 
+### Données de pêche 
+
+Charge les données sur les activités humaines 
+
+```{r}
+load("20200928_SAMM_data_Pressure.RData")
+
+head(winter$obsdata)
+```
+
+Problème : il manque les dates de chaque observation. On va faire le lien via les `Sample.Label` de la table `seg` qui contient les transects.
+
+```{r}
+
+# winter 
+activ_w <- winter_fishingactivities$obsdata %>% 
+  mutate(Sample.Label = as.numeric(Sample.Label)) %>% 
+  mutate(date = as_date(NA))
+
+seg_dat <- seg %>% filter(season == "winter") %>% select(date, Sample.Label) %>% 
+  mutate(Sample.Label = as.numeric(Sample.Label))
+
+
+for(i in 1:nrow(activ_w)){
+  
+  index <- which(seg_dat$Sample.Label == activ_w$Sample.Label[i])[1]
+  
+  activ_w$date[i] <- as_date(seg_dat$date[index])
+}
+
+# summer 
+activ_s <- summer_fishingactivities$obsdata %>% 
+  mutate(Sample.Label = as.numeric(Sample.Label)) %>% 
+  mutate(date = as_date(NA))
+
+seg_dat <- seg %>% filter(season == "summer") %>% select(date, Sample.Label) %>% 
+  mutate(Sample.Label = as.numeric(Sample.Label))
+
+
+for(i in 1:nrow(activ_s)){
+  
+  index <- which(seg_dat$Sample.Label == activ_s$Sample.Label[i])[1]
+  
+  activ_s$date[i] <- seg_dat$date[index]
+}
+
+```
+
+Maintenant qu'on a rajouté les dates on peut fusionner les tables. NB. Il fallait rajouter les dates AVANT de fusionner les tables car il y a des `Sample.Label` identiques en été et en hiver. En gros, ils ont repris à 0 la numerotation des `Sample.Label` entre l'été et l'hiver.
+
+```{r}
+activ <- bind_rows(activ_w, activ_s) %>% 
+  mutate(season = c(rep("winter", nrow(activ_w)),rep("summer",nrow(activ_s))))
+```
+
+
+
+Le nombre d'évènement par type d'activité de peche
+```{r}
+activ %>%
+  count(what) 
+```
+
+Pour l'étude, on ne garde que les chalutiers. On filtre sur `what == "Bateau chalutier"` et on spatialise avec les colonnes `latitude` et `longitude`.
+
+```{r}
+sactiv <- activ %>% 
+  filter(what == "Bateau chalutier") %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs =" +proj=longlat +datum=WGS84") %>% 
+  st_transform(crs = st_crs(grid))
+
+
+grid %>% ggplot() + geom_sf(lwd = 0.1, fill = "white")+
+  geom_sf(data = pays) +
+  geom_sf(data= tr2, aes(color = "Transects"), alpha = 0.4)+
+  geom_sf(data = sobs, aes(color = "Dauphins"), alpha = 0.7) + 
+  geom_sf(data = sactiv, aes(color = "Chalutiers"), alpha = 0.7 )+ 
+  scale_color_manual(name = "Espèce", values = c("Dauphins" = "#0F4C5C", "Chalutiers" = "#5f0f40", "Transects" = "lightblue3")) +
+  labs(title = "Observations de chalutiers", subtitle  = "Données SAMM été et hiver \nObs de dauphin en arrière plan")
+```
+
+
+
+## Création des matrices pour l'occupancy
+
+On va créer 3 matrices de dimensions nb_cellules x nb_occasions, i.e. 4356 x 4 :  
+
+  * `samm_effort` pour stocker l'effort comme la longueur de transect par cellule et par occasion.  
+  * `yd_samm` pour stocker les détections de **grand dauphin** par cellule et par occasion.  
+  * `yp_samm` pour stocjer les détection de **chalutier** par cellule et par occasion.  
+  
+  
+### Observation de grand dauphin 
+
+Intersection des observations de grand dauhpin avec les cellules de la grille occupancy
+
+```{r}
+int <-  sobs %>% 
+  st_intersection(grid) %>% 
+  select(date, Sample.Label, count, season, objectid, geometry)
+
+int %>% st_intersects(grid) %>%  # nombre de cellule de la grille avec une detection
+  unlist() %>% 
+  unique() %>% 
+  length()
+```
+
+Sépare chaque observation en fonction du mois de l'année pour l'assigner à une occasion.
+```{r}
+int2 <- int  %>%
+  mutate(month = month(date)) %>% 
+  mutate(month = as_factor(month),
+         month = fct_relevel(month, c("11", "12", "1", "2", "5", "6", "7", "8")))
+
+# cree la matrice
+yd_samm <- grid %>% mutate(obs = 0, autumn = 0, winter = 0, spring = 0, summer = 0)
+
+# remplit la matrice (il y a peut-être un version tidy pour reste ça rapidos)
+for(i in 1:nrow(int2)){
+  
+  index <-  which(yd_samm$objectid == int2$objectid[i])
+  occ <- int2$month[i]
+  
+  yd_samm$obs[index] <- 1
+  
+  if( occ %in% c("1","2","3") ) yd_samm$winter[index] <- 1
+  if( occ %in% c("4","5","6") ) yd_samm$spring[index] <- 1
+  if( occ %in% c("7","8","9") ) yd_samm$summer[index] <- 1
+  if( occ %in% c("10","11","12") ) yd_samm$autumn[index] <- 1
+  
+}
+
+# verif
+sum(yd_samm$obs)
+```
+
+La matrice observation de grand dauphin.
+
+```{r}
+head(yd_samm)
+```
+
+### Observation de chalutiers
+
+Intersection des observations de chalutiers avec les cellules de la grille occupancy
+
+```{r}
+int <-  sactiv %>% 
+  st_intersection(grid) %>% 
+  select(date, Sample.Label, what, season, objectid, geometry)
+
+int %>% st_intersects(grid) %>%  # nombre de cellule de la grille avec une detection
+  unlist() %>% 
+  unique() %>% 
+  length()
+```
+
+Sépare chaque observation en fonction du mois de l'année pour l'assigner à une occasion.
+```{r}
+int2 <- int  %>%
+  mutate(month = month(date)) %>% 
+  mutate(month = as_factor(month))
+
+# cree la matrice
+yp_samm <- grid %>% mutate(obs = 0, autumn = 0, winter = 0, spring = 0, summer = 0)
+
+# remplit la matrice (il y a peut-être un version tidy pour reste ça rapidos)
+for(i in 1:nrow(int2)){
+  
+  index <-  which(yp_samm$objectid == int2$objectid[i])
+  occ <- int2$month[i]
+  
+  yp_samm$obs[index] <- 1
+  
+  if( occ %in% c("1","2","3") )    yp_samm$winter[index] <- 1
+  if( occ %in% c("4","5","6") )    yp_samm$spring[index] <- 1
+  if( occ %in% c("7","8","9") )    yp_samm$summer[index] <- 1
+  if( occ %in% c("10","11","12") ) yp_samm$autumn[index] <- 1
+  
+}
+
+# verif
+sum(yp_samm$obs)
+```
+
+La matrice observation de chalutier. 
+
+```{r}
+head(yp_samm)
+```
+
+### Effort d'échantillonage
+
+Longueur totale des transect SAMM été et hiver 
+
+```{r}
+st_length(tr2) %>% sum()
+```
+
+Intersection entre tous les transects et les cellules de la grille + calcul de la longueur de chaque bout de transect
+
+```{r}
+int <-  tr2 %>% 
+  st_intersection(grid)# %>% 
+  
+int <- int %>% select(m, season, objectid, geometry) %>% mutate(eff = st_length(int))
+```
+
+Dans plusieurs cas, il y a différents transects qui sont passés dans une même cellule au cours de la même saison. Il faut regrouper.
+
+```{r}
+int2 <- int %>% 
+  group_by(objectid, season) %>% 
+  summarise(sum(eff))
+
+# nb de sites différents échantillonés 
+length(unique(int2$objectid))
+
+# effort total
+sum(int2$`sum(eff)`)
+```
+
+
+Maintenant on peut séparer chaque transect en fonction du mois de l'année pour l'assigner à une occasion.
+```{r}
+# cree la matrice
+effort_samm <- grid %>% mutate(eff.tot = 0, autumn = 0, winter = 0, spring = 0, summer = 0)
+
+# remplit la matrice (il y a peut-être un version tidy pour reste ça rapidos)
+for(i in 1:nrow(int2)){
+  
+  index <-  which(effort_samm$objectid == int2$objectid[i])
+  occ <- int2$season[i]
+  
+  if( occ == "Winter" )    effort_samm$winter[index] <- int2$`sum(eff)`[i]
+  if( occ == "Spring" )    effort_samm$spring[index] <- int2$`sum(eff)`[i]
+  if( occ == "Summer" )    effort_samm$summer[index] <- int2$`sum(eff)`[i]
+  if( occ == "Autumn" )    effort_samm$autumn[index] <- int2$`sum(eff)`[i]
+}
+
+effort_samm$eff.tot <-  effort_samm$autumn +  effort_samm$winter +  effort_samm$summer +  effort_samm$spring
+
+# verif
+sum(effort_samm$eff.tot)
+```
+
+La matrice de l'effort d'échantillonnage.
+
+```{r}
+head(effort_samm)
+```
+
+### Résumé 
+
+Regroupe les trois matrices dans une liste et sauve les résultats 
+
+```{r}
+multioccu_samm <- list(dauphins = yd_samm, chalut = yp_samm, effort = effort_samm)
+
+save(multioccu_samm, file ="msoccu_samm.rdata")
+```
+
+Visualisation des occurences des deux espèces
+
+```{r}
+# co-occurence
+cooc <- which(multioccu_samm$chalut$obs ==1 & multioccu_samm$dauphins$obs ==1)
+
+# plot
+multioccu_samm$dauphins[] %>% filter(obs == 1) %>% ggplot() + geom_sf(aes(fill = "Dauphins"), lwd = 0.1) +
+  geom_sf(data = multioccu_samm$chalut[multioccu_samm$chalut$obs == 1,], aes(fill = "Chalutiers"), lwd = 0.1) + 
+  geom_sf(data = grid[cooc,],aes( fill = "Co-occurence"), lwd = 0.1 )+ 
+  scale_fill_manual(name = "Espèce", values = c("Dauphins" = "#0F4C5C", "Chalutiers" = "#5f0f40", "Co-occurence" = "#e36414")) +
+  geom_sf(data = pays) + 
+  labs(title = "Occurences des dauphins et chalutiers à partir des données SAMM", 
+                              subtitle = "sur la grille utilisée pour l'occupancy")
+```
+
