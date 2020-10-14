@@ -231,7 +231,7 @@ int %>% st_intersects(grid_gdl) %>%  # nombre de cellule de la grille avec une d
 Sépare chaque observation en fonction du mois de l'année pour l'assigner à une occasion.
 ```{r}
 # cree la matrice
-yp_gd <- grid %>% mutate(obs = 0, autumn = 0, winter = 0, spring = 0, summer = 0)
+yp_gd <- grid_gdl %>% mutate(obs = 0, autumn = 0, winter = 0, spring = 0, summer = 0)
 
 # remplit la matrice (il y a peut-être un version tidy pour reste ça rapidos)
 for(i in 1:nrow(int)){
