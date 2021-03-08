@@ -21,7 +21,12 @@ library(sf)
 Load grid and occupancy data.
 ```{r}
 load("pays.rdata")
+<<<<<<< HEAD
 grid <- st_read("Grid/grid.shp") %>% st_transform(crs = st_crs(pays))
+=======
+#grid <- st_read("Grid/grid.shp") %>% st_transform(crs = st_crs(pays))
+load("grid.rdata")
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 # focus Golfe du Lion
 grid <-  grid %>% st_crop(xmin = 700000, xmax = 900000, ymin = 6140000, ymax = 6300000) 
 pays <- pays %>% st_crop(st_bbox(grid))
@@ -31,7 +36,11 @@ load('msoccu_gd.rdata')
 Visualise data.
 ```{r}
 df <- bind_rows(multioccu_gd$dauphins %>% add_column(species = "dauphin"), 
+<<<<<<< HEAD
           multioccu_gd$chalut %>% add_column(species = "chalutier"))
+=======
+          multioccu_gd$chalut %>% add_column(species = "chalutier")) 
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 cooc <- which(multioccu_gd$chalut$obs == 1 & multioccu_gd$dauphins$obs == 1)
 
 df %>%
@@ -165,7 +174,16 @@ det_covs[[1]] <- st_effort
 det_covs[[2]] <- st_effort
 names(det_covs) <- paste('det_cov',1:2,sep='')
 
+<<<<<<< HEAD
 data <- unmarkedFrameOccuMulti(y = y, obsCovs = det_covs) #,siteCovs=occ_covs,obsCovs=det_covs)
+=======
+cov_bathy <- grid$bathy[ind_effort!=0]
+#grid %>% ggplot() + geom_sf(aes(fill = bathy))
+
+data <- unmarkedFrameOccuMulti(y = y, 
+                               siteCovs = data.frame(bathy = cov_bathy), 
+                               obsCovs = det_covs) #,siteCovs=occ_covs,obsCovs=det_covs)
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 ```
 
 Summary stats.
@@ -181,7 +199,11 @@ plot(data)
 
 Specific effects on parameters. Natural parameters are constant, detection probabilities are species-species, and a function of the sampling effort. 
 ```{r}
+<<<<<<< HEAD
 occFormulas <- c('~1','~1','~1') 
+=======
+occFormulas <- c('~bathy','~bathy','~bathy') 
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 detFormulas <- c('~det_cov1','~det_cov2')
 ```
 
@@ -195,6 +217,7 @@ Inspect results.
 fit
 ```
 
+<<<<<<< HEAD
 Get the natural parameter and detection estimates.
 ```{r}
 mle <- fit@opt$par[1:3]
@@ -211,12 +234,19 @@ den <- 1 + exp(mle['f1'])+exp(mle['f2'])+exp(mle['f1']+mle['f2']+mle['f12'])
 ```
 
 I do it by hand to understand how `unmarked` works. The easy way is to use `predict(fit,'state')`.
+=======
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 
 Get the detection estimates.
 ```{r}
 grid_p <- seq(range(st_effort)[1], range(st_effort)[2], length = 100)
+<<<<<<< HEAD
 logit_p1 <- fit@opt$par[4] + fit@opt$par[5] * grid_p
 logit_p2 <- fit@opt$par[6] + fit@opt$par[7] * grid_p
+=======
+logit_p1 <- fit@opt$par[7] + fit@opt$par[8] * grid_p
+logit_p2 <- fit@opt$par[9] + fit@opt$par[10] * grid_p
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 plot(grid_p, plogis(logit_p1), 
      type = "l", 
      col = "#0F4C5C", 
@@ -281,6 +311,7 @@ model <- function() {
   
   ## state process
   for(j in 1:nsite) {
+<<<<<<< HEAD
     z[j] ~ dcat(psi[1:4])
   }
   
@@ -289,6 +320,18 @@ model <- function() {
   psi[2] <- prop[1] / (1 + sum(prop[1:3])) # occupied by species A and not B
   psi[3] <- prop[2] / (1 + sum(prop[1:3])) # occupied by species B and not A
   psi[4] <- prop[3] / (1 + sum(prop[1:3])) # occupied by both species A and B
+=======
+    z[j] ~ dcat(psi[j, 1:4])
+  }
+  
+  # occupancy probabilities
+  for (i in 1:nsite){
+    psi[i, 1] <- 1 / (1 + sum(prop[i, 1:3])) # unoccupied
+    psi[i, 2] <- prop[i, 1] / (1 + sum(prop[i, 1:3])) # occupied by species A and not B
+    psi[i, 3] <- prop[i, 2] / (1 + sum(prop[i, 1:3])) # occupied by species B and not A
+    psi[i, 4] <- prop[i, 3] / (1 + sum(prop[i, 1:3])) # occupied by both species A and B
+  }
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
   
   ## observation process
   for(j in 1:nsite) {
@@ -329,10 +372,23 @@ model <- function() {
   }  
   ## priors for...
   # occupancy probabilities
+<<<<<<< HEAD
   for (i in 1:3){
     log(prop[i]) <- theta[i] 
     theta[i] ~ dnorm(0,1) 
   }
+=======
+  for(i in 1:nsite) {
+      log(prop[i, 1]) <- alpha[1] + alpha[2] * bathy[i]
+      log(prop[i, 2]) <- alpha[3] + alpha[4] * bathy[i]
+      log(prop[i, 3]) <- alpha[5] + alpha[6] * bathy[i]
+  }
+  
+  for (ii in 1:6){
+    alpha[ii] ~ dnorm(0, 1)
+  }
+  
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
   # detection probabilities (pA function of pres/abs of B, as in Waddle et al 2010 page 1470)
   for(j in 1:nsite) {
     B_present[j] <- equals(z[j], 3) + equals(z[j], 4)
@@ -352,7 +408,12 @@ Specify data, initial values, parameters to be monitored and various MCMC detail
 data <- list(y = y_jags, 
              nsite = dim(y_jags)[1], 
              nyear = dim(y_jags)[2],
+<<<<<<< HEAD
              eff = st_effort)
+=======
+             eff = st_effort,
+             bathy = (cov_bathy - mean(cov_bathy)) / sd(cov_bathy))
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 ```
 
 Initial values.
@@ -361,18 +422,31 @@ zinit <- apply(data$y, 1, max, na.rm = TRUE)
 zinit[zinit==3] <- 4
 inits <- function() {list(z = zinit, 
                           beta = rnorm(5, 0, 1), 
+<<<<<<< HEAD
                           theta = rnorm(3, 0, 1))}
+=======
+                          alpha = rnorm(6, 0, 1))}
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 ```
 
 Parameters to be monitored.
 ```{r}
+<<<<<<< HEAD
 params <- c("prop","theta","beta")
+=======
+params <- c("prop", "alpha", "beta")
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 ```
 
 MCMC settings
 ```{r}
+<<<<<<< HEAD
 ni <- 10000
 nb <- 2500
+=======
+ni <- 5000
+nb <- 1000
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 nc <- 2
 ```
 
@@ -396,6 +470,15 @@ Save run.
 save(out, file = "run_gdegem.RData")
 ```
 
+<<<<<<< HEAD
+=======
+Inspect results.
+```{r}
+print(out,digits = 2)
+```
+
+
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 Check convergence.
 ```{r}
 jagsfit.mcmc <- coda::as.mcmc(out$BUGSoutput$sims.matrix)
@@ -408,6 +491,7 @@ Posterior densities.
 densityplot(jagsfit.mcmc)
 ```
 
+<<<<<<< HEAD
 Print results.
 ```{r}
 print(out,digits = 2)
@@ -450,6 +534,46 @@ median(psi3 / (psi3 + psi2)) # Pr(dolphin present | fishing present) ?= Pr(dolph
 median(psi2 / (psi2 + psi0)) # Pr(fishing present | dolphin absent) = Pr(fishing)
 median(psi3 / (psi3 + psi1)) # Pr(fishing present | dolphin present) = Pr(fishing)
 ```
+=======
+
+Get posterior medians of relevant parameters.
+
+<!-- Start w/ occupancy. -->
+<!-- ```{r} -->
+<!-- prop1 <- c(out$BUGSoutput$sims.array[,,'prop[1]']) -->
+<!-- prop2 <- c(out$BUGSoutput$sims.array[,,'prop[2]']) -->
+<!-- prop3 <- c(out$BUGSoutput$sims.array[,,'prop[3]']) -->
+<!-- psi1 <- plogis(prop1) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3)) -->
+<!-- psi2 <- plogis(prop2) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3)) -->
+<!-- psi3 <- plogis(prop3) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3)) -->
+<!-- psi0 <- 1 - (psi1 + psi2 + psi3) -->
+<!-- # res -->
+<!-- res <- data.frame(post_median = c(median(psi0), -->
+<!--                                 median(psi1),  -->
+<!--                                 median(psi2),  -->
+<!--                                 median(psi3))) -->
+<!-- rownames(res) <- c('psi00','psi10','psi01','psi11') -->
+<!-- round(res,3) -->
+<!-- ``` -->
+
+
+<!-- Marginal probabilities. -->
+<!-- ```{r} -->
+<!-- median(psi1 + psi3) # Pr(dolphin present) -->
+<!-- median(psi2 + psi3) # Pr(fishing present) -->
+<!-- median(psi2 + psi0) # Pr(dolphin absent) -->
+<!-- median(psi1 + psi0) # Pr(fishing absent) -->
+<!-- ``` -->
+
+
+<!-- Conditional probabilities. -->
+<!-- ```{r} -->
+<!-- median(psi1 / (psi1 + psi0)) # Pr(dolphin present | fishing absent) ?= Pr(dolphin present) -->
+<!-- median(psi3 / (psi3 + psi2)) # Pr(dolphin present | fishing present) ?= Pr(dolphin present) -->
+<!-- median(psi2 / (psi2 + psi0)) # Pr(fishing present | dolphin absent) = Pr(fishing) -->
+<!-- median(psi3 / (psi3 + psi1)) # Pr(fishing present | dolphin present) = Pr(fishing) -->
+<!-- ``` -->
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 
 Detection.
 ```{r}
@@ -513,6 +637,7 @@ model2 <- function() {
   
   ## state process
   for(j in 1:nsite) {
+<<<<<<< HEAD
     z[j] ~ dcat(psi[1:4])
   }
   
@@ -522,6 +647,18 @@ model2 <- function() {
   psi[3] <- prop[2] / (1 + sum(prop[1:3])) # occupied by species B and not A
   psi[4] <- prop[3] / (1 + sum(prop[1:3])) # occupied by both species A and B
   
+=======
+    z[j] ~ dcat(psi[j, 1:4])
+  }
+  
+  # occupancy probabilities
+  for (i in 1:nsite){
+  psi[i, 1] <- 1 / (1 + sum(prop[i, 1:3])) # unoccupied
+  psi[i, 2] <- prop[i, 1] / (1 + sum(prop[i, 1:3])) # occupied by species A and not B
+  psi[i, 3] <- prop[i, 2] / (1 + sum(prop[i, 1:3])) # occupied by species B and not A
+  psi[i, 4] <- prop[i, 3] / (1 + sum(prop[i, 1:3])) # occupied by both species A and B
+  }
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
   ## observation process
   for(j in 1:nsite) {
     for(k in 1:nyear) {
@@ -561,10 +698,21 @@ model2 <- function() {
   }  
   ## priors for...
   # occupancy probabilities
+<<<<<<< HEAD
   for (i in 1:3){
     log(prop[i]) <- theta[i] 
     theta[i] ~ dnorm(0,1) 
   }
+=======
+  for (i in 1:nsite){
+    log(prop[i, 1]) <- alpha[1] + alpha[2] * bathy[i] 
+    log(prop[i, 2]) <- alpha[3] + alpha[4] * bathy[i] 
+    log(prop[i, 3]) <- alpha[5] + alpha[6] * bathy[i] 
+  }
+  
+  for (ii in 1:6){alpha[ii] ~ dnorm(0,1)}
+  
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
   # detection probabilities (pA function of pres/abs of B, as in Waddle et al 2010 page 1470)
   for(j in 1:nsite) {
     for(k in 1:nyear) {
@@ -584,18 +732,31 @@ zinit <- apply(data$y, 1, max, na.rm = TRUE)
 zinit[zinit==3] <- 4
 inits <- function() {list(z = zinit, 
                           beta = rnorm(4, 0, 1), 
+<<<<<<< HEAD
                           theta = rnorm(3, 0, 1))}
+=======
+                          alpha = rnorm(6, 0, 1))}
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 ```
 
 Parameters to be monitored.
 ```{r}
+<<<<<<< HEAD
 params <- c("prop","theta","beta")
+=======
+params <- c("prop","alpha","beta")
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 ```
 
 MCMC settings
 ```{r}
+<<<<<<< HEAD
 ni <- 10000
 nb <- 2500
+=======
+ni <- 5000
+nb <- 1000
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 nc <- 2
 ```
 
@@ -615,12 +776,15 @@ x2 # 15 minutes
 save(x2, out2, file = "runwochalutier_gdegem.RData")
 ```
 
+<<<<<<< HEAD
 Check convergence.
 ```{r}
 jagsfit.mcmc <- as.mcmc(out2$BUGSoutput$sims.matrix)
 library(lattice)
 xyplot(jagsfit.mcmc, layout=c(4,3))
 ```
+=======
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 
 Print results.
 ```{r}
@@ -638,13 +802,22 @@ Get the ingredients for GAMs using package `jagam` developed by Simon Wood and b
 yy_dolphin <- apply(y_dolphin, 1, max, na.rm = TRUE)
 coordx <- coord[,1]
 coordy <- coord[,2]
+<<<<<<< HEAD
 library(mgcv)
 res <- jagam(yy_dolphin ~ s(coordx, coordy, bs = "gp"), 
+=======
+mbathy <- mean(cov_bathy)
+sdbathy <- sd(cov_bathy)
+stbathy <- (cov_bathy - mbathy)/sdbathy
+library(mgcv)
+res <- jagam(yy_dolphin ~ s(stbathy) + s(coordx, coordy, bs = "gp"), 
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
             family = "binomial",
             file = "psi.txt") # same structure for fishing boats and both together
 #save(res, file = 'jagam.RData')
 ```
 
+<<<<<<< HEAD
 <!-- # model { -->
 <!-- #   eta <- X %*% b ## linear predictor -->
 <!-- #   for (i in 1:n) { mu[i] <-  ilogit(eta[i]) } ## expected response -->
@@ -661,6 +834,26 @@ res <- jagam(yy_dolphin ~ s(coordx, coordy, bs = "gp"),
 <!-- #   } -->
 <!-- # } -->
 
+=======
+<!-- model { -->
+<!--   eta <- X %*% b ## linear predictor -->
+<!--   for (i in 1:n) { mu[i] <-  ilogit(eta[i]) } ## expected response -->
+<!--   for (i in 1:n) { y[i] ~ dbin(mu[i],w[i]) } ## response  -->
+<!--   ## Parametric effect priors CHECK tau=1/7.3^2 is appropriate! -->
+<!--   for (i in 1:1) { b[i] ~ dnorm(0,0.019) } -->
+<!--   ## prior for s(cov_bathy)...  -->
+<!--   K1 <- S1[1:9,1:9] * lambda[1]  + S1[1:9,10:18] * lambda[2] -->
+<!--   b[2:10] ~ dmnorm(zero[2:10],K1)  -->
+<!--   ## prior for s(coordx,coordy)...  -->
+<!--   K2 <- S2[1:32,1:32] * lambda[3]  + S2[1:32,33:64] * lambda[4] -->
+<!--   b[11:42] ~ dmnorm(zero[11:42],K2)  -->
+<!--   ## smoothing parameter priors CHECK... -->
+<!--   for (i in 1:4) { -->
+<!--     lambda[i] ~ dgamma(.05,.005) -->
+<!--     rho[i] <- log(lambda[i]) -->
+<!--   } -->
+<!-- } -->
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 
 Specify model in BUGS language. 
 ```{r}
@@ -728,6 +921,7 @@ model <- function() {
   theta2 <- X %*% b2 ## linear predictor
   theta3 <- X %*% b3 ## linear predictor
 
+<<<<<<< HEAD
     b1[1] ~ dnorm(0,0.01) 
     b2[1] ~ dnorm(0,0.01) 
     b3[1] ~ dnorm(0,0.01) 
@@ -741,13 +935,41 @@ model <- function() {
   b3[2:33] ~ dmnorm(zero[2:33], K13) 
   ## smoothing parameter priors CHECK...
   for (i in 1:2) {
+=======
+    b1[1] ~ dnorm(0,0.019) 
+    b2[1] ~ dnorm(0,0.019) 
+    b3[1] ~ dnorm(0,0.019) 
+
+  ## prior for s(bathy) 
+  K11 <- S1[1:9,1:9] * lambda[1, 1]  + S1[1:9,10:18] * lambda[2, 1]
+  K12 <- S1[1:9,1:9] * lambda[1, 2]  + S1[1:9,10:18] * lambda[2, 2]
+  K13 <- S1[1:9,1:9] * lambda[1, 3]  + S1[1:9,10:18] * lambda[2, 3]
+  b1[2:10] ~ dmnorm(zero[2:10], K11) 
+  b2[2:10] ~ dmnorm(zero[2:10], K12) 
+  b3[2:10] ~ dmnorm(zero[2:10], K13) 
+
+  ## prior for s(coordx,coordy) 
+  K21 <- S2[1:32,1:32] * lambda[3, 1]  + S2[1:32,33:64] * lambda[4, 1]
+  K22 <- S2[1:32,1:32] * lambda[3, 2]  + S2[1:32,33:64] * lambda[4, 2]
+  K23 <- S2[1:32,1:32] * lambda[3, 3]  + S2[1:32,33:64] * lambda[4, 3]
+  b1[11:42] ~ dmnorm(zero[11:42], K21) 
+  b2[11:42] ~ dmnorm(zero[11:42], K22) 
+  b3[11:42] ~ dmnorm(zero[11:42], K23) 
+  
+  ## smoothing parameter priors
+  for (i in 1:4) {
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
     for (kk in 1:3){
       lambda[i, kk] ~ dgamma(.05,.005)
       rho[i, kk] <- log(lambda[i, kk])
     }
   }
 
+<<<<<<< HEAD
   # detection probabilities (pA function of pres/abs of B, as in Waddle et al 2010 page 1470)
+=======
+# detection probabilities (pA function of pres/abs of B, as in Waddle et al 2010 page 1470)
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
   for(j in 1:nsite) {
     B_present[j] <- equals(z[j], 3) + equals(z[j], 4)
     for(k in 1:nyear) {
@@ -771,6 +993,10 @@ data <- list(y = y_jags,
              eff = st_effort,
              X = res$jags.data$X, 
              S1 = res$jags.data$S1,
+<<<<<<< HEAD
+=======
+             S2 = res$jags.data$S2,
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
              zero = res$jags.data$zero)
 
 # initial values
@@ -787,7 +1013,11 @@ inits <- function() {list(z = zinit,
 params <- c("beta", "b1", "b2", "b3", "lambda")
 
 # MCMC settings
+<<<<<<< HEAD
 ni <- 25000
+=======
+ni <- 10000
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 nb <- 5000
 nc <- 2
 ```
@@ -859,7 +1089,11 @@ Let's build a nice map of the co-occurrence of dolphins and fishing boats.
 
 First, get the whole grid. 
 ```{r}
+<<<<<<< HEAD
 grid_coord <- st_read("Grid/grid.shp") %>% 
+=======
+grid_coord <- grid %>% 
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
   st_transform(crs = st_crs(pays)) %>%
   st_crop(xmin = 700000, xmax = 900000, ymin = 6140000, ymax = 6300000) %>%
   st_centroid() %>%
@@ -868,16 +1102,25 @@ grid_coord <- st_read("Grid/grid.shp") %>%
   mutate(easting = (X - meanX)/sdX,
          northing = (Y - meanY)/sdY)
 
+<<<<<<< HEAD
 grid_coord <-  grid %>%
   st_centroid() %>%
   st_coordinates() %>%
   as_tibble() %>%
   mutate(easting = (X - meanX)/sdX,
          northing = (Y - meanY)/sdY)
+=======
+grid_bathy <- grid %>% 
+  st_transform(crs = st_crs(pays)) %>%
+  st_crop(xmin = 700000, xmax = 900000, ymin = 6140000, ymax = 6300000) %>%
+  mutate(cov_bathy = (bathy - mbathy) / sdbathy) %>%
+  pull(cov_bathy )
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 ```
 
 Second, get linear predictor. 
 ```{r}
+<<<<<<< HEAD
 sm <- smoothCon(s(coordx, coordy, bs = "gp"), 
                           data = data.frame(coordx = grid_coord$easting, 
                                             coordy = grid_coord$northing), 
@@ -886,6 +1129,27 @@ sm <- smoothCon(s(coordx, coordy, bs = "gp"),
 Xp <- PredictMat(sm[[1]], data.frame(coordx = grid_coord$easting, 
                                      coordy = grid_coord$northing))
 Xp <- cbind(1, Xp)
+=======
+sm_bathy <- smoothCon(s(bathy), 
+                          data = data.frame(bathy = grid_bathy,
+                                            coordx = grid_coord$easting, 
+                                            coordy = grid_coord$northing), 
+                          absorb.cons = TRUE) 
+
+sm_xy <- smoothCon(s(coordx, coordy, bs = "gp"), 
+                          data = data.frame(bathy = grid_bathy,
+                                            coordx = grid_coord$easting, 
+                                            coordy = grid_coord$northing), 
+                          absorb.cons = TRUE) 
+
+Xp_bathy <- PredictMat(sm_bathy[[1]], data.frame(bathy = grid_bathy,
+                                     coordx = grid_coord$easting, 
+                                     coordy = grid_coord$northing))
+Xp_xy <- PredictMat(sm_xy[[1]], data.frame(bathy = grid_bathy,
+                                     coordx = grid_coord$easting, 
+                                     coordy = grid_coord$northing))
+Xp <- cbind(1, Xp_bathy, Xp_xy)
+>>>>>>> 83c3f30226831dc8061c22df36c44a2a4efc119f
 b1 <- out$BUGSoutput$sims.list$b1
 b2 <- out$BUGSoutput$sims.list$b2
 b3 <- out$BUGSoutput$sims.list$b3
