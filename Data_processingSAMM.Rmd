@@ -92,7 +92,7 @@ grid %>% ggplot() + geom_sf(lwd = 0.1)+
   geom_sf(data = pays) +
   geom_sf(data = sobs, aes(color = "Dauphins")) + 
     scale_color_manual(name = "Espèce", values = c("Dauphins" = "#0F4C5C")) +
-  labs(title = "Observations de grand dauphin", subtitle  = "Données SAMM été et hiver")
+  labs(title = "Observations de grand dauphin", caption  = "Données SAMM été et hiver")
 ```
  
 ### Données de pêche 

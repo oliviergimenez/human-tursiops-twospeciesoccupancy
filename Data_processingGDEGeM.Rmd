@@ -92,7 +92,8 @@ J'utilise la table `tt_obs` en filtrant les detections qui ont été faites par 
 ```{r}
 load("tt_obs.rdata")
 
-obs <- tt_obs %>% filter(suivi == "GDEGeM") %>% 
+obs <- tt_obs %>% st_transform(st_crs(grid)) %>% 
+  filter(suivi == "GDEGeM") %>% 
   st_crop(tr_eoi2) %>% 
   mutate(m = month(as_date(dates))) %>% 
   mutate(season = case_when(
@@ -363,8 +364,9 @@ Visualisation des occurences des deux espèces
 cooc <- which(multioccu_gd$chalut$obs ==1 & multioccu_gd$dauphins$obs ==1)
 
 # plot
-multioccu_gd$dauphins[] %>% filter(obs == 1) %>% 
-  ggplot() + geom_sf(aes(fill = "Dauphins"), lwd = 0.1) +
+multioccu_gd$effort[] %>% filter(eff.tot > 0) %>% 
+  ggplot() + geom_sf(fill = "lightblue3") +
+  geom_sf(data = multioccu_gd$dauphins[] %>% filter(obs == 1), aes(fill = "Dauphins"), lwd = 0.1)+
   geom_sf(data = multioccu_gd$chalut[multioccu_gd$chalut$obs == 1,], aes(fill = "Chalutiers"), lwd = 0.1) + 
   geom_sf(data = grid_gdl[cooc,],aes( fill = "Co-occurence"), lwd = 0.1 )+ 
   scale_fill_manual(name = "Espèce", values = c("Dauphins" = "#0F4C5C", "Chalutiers" = "#5f0f40", "Co-occurence" = "#e36414")) +
