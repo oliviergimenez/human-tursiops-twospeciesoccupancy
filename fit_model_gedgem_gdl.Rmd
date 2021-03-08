@@ -1,0 +1,943 @@
+---
+title: "ajustement modèles à 2 espèces sur données GDEGeM sur Golfe du Lion"
+author: "Olivier Gimenez"
+date: "10/13/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      dpi = 300, 
+                      cache = TRUE)
+library(tidyverse)
+theme_set(theme_light())
+library(sf)
+```
+
+## Format and visualise data 
+
+Load grid and occupancy data.
+```{r}
+load("pays.rdata")
+grid <- st_read("Grid/grid.shp") %>% st_transform(crs = st_crs(pays))
+# focus Golfe du Lion
+grid <-  grid %>% st_crop(xmin = 700000, xmax = 900000, ymin = 6140000, ymax = 6300000) 
+pays <- pays %>% st_crop(st_bbox(grid))
+load('msoccu_gd.rdata')
+```
+
+Visualise data.
+```{r}
+df <- bind_rows(multioccu_gd$dauphins %>% add_column(species = "dauphin"), 
+          multioccu_gd$chalut %>% add_column(species = "chalutier"))
+cooc <- which(multioccu_gd$chalut$obs == 1 & multioccu_gd$dauphins$obs == 1)
+
+df %>%
+  ggplot() + 
+  geom_sf(data = df %>% filter(obs == 1, species == "dauphin"), lwd = 0.1, aes(fill = "dauphin")) +
+  geom_sf(data = df %>% filter(obs == 1, species == "chalutier"), lwd = 0.1, aes(fill = "chalutier")) + 
+  geom_sf(data = grid %>% slice(cooc), lwd = 0.1, aes(fill = "ensemble"))+ 
+  scale_fill_manual(name = "", 
+                    values = c("dauphin" = "#0F4C5C", 
+                               "chalutier" = "#5f0f40", 
+                               "ensemble" = "#e36414")) +
+  geom_sf(data = pays) + 
+  labs(title = "Détections de dauphins et chalutiers", 
+       caption = "Source : Données GDEGeM")
+```
+
+Build datasets. 
+```{r}
+# sampling effort
+effort <- multioccu_gd$effort %>% 
+  select(autumn:summer) %>%
+  as_tibble() %>%
+  select(-geometry) %>% 
+  as.matrix() # 397 x 4
+
+# dolphin detections/non-detections
+y_dolphin <- df %>% 
+  filter(species == "dauphin") %>%
+  select(autumn:summer) %>%
+  as_tibble() %>%
+  select(-geometry) %>% 
+  as.matrix()
+y_dolphin[effort == 0] <- NA
+ind_dolphin <- apply(y_dolphin, 1, function(x) all(is.na(x)))
+y_dolphin <- y_dolphin[ !ind_dolphin, ]
+
+# fishing boats detections/non-detections
+y_fishing <- df %>% 
+  filter(species == "chalutier") %>%
+  select(autumn:summer) %>%
+  as_tibble() %>%
+  select(-geometry) %>% 
+  as.matrix()
+y_fishing[effort == 0] <- NA
+ind_fishing <- apply(y_fishing, 1, function(x) all(is.na(x)))
+y_fishing <- y_fishing[ !ind_fishing, ]
+
+# grid cells coordinates
+coord <- df %>% 
+  filter(species == "dauphin") %>%
+  select(autumn:summer) %>%
+  st_centroid() %>%
+  st_coordinates() %>%
+  as_tibble() %>%
+  mutate(easting = (X - mean(X)) / sd(X), 
+         northing = (Y - mean(Y)) / sd(Y)) %>%
+  select(easting, northing) %>%
+  as.matrix()
+mask <- apply(effort == 0, 1, sum) == 4
+coord <- coord[!mask,]
+dim(coord)
+
+# means and standard deviations used to standardise the grid cells coordinates
+temp <- df %>% 
+  filter(species == "dauphin") %>%
+  st_centroid() %>%
+  st_coordinates() %>%
+  as.matrix() 
+meanX <- mean(temp[,1])
+sdX <- sd(temp[,1])
+meanY <- mean(temp[,2])
+sdY <- sd(temp[,2])
+```
+
+## An ounce of theory 
+
+We consider a two-species static occupancy model à la [Rota et al. (2016)](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12587). 
+
+Ignoring the site index, we use the following notation for the occupancy probabilities:
+
+* $\psi_{11}$ is the prob. that species 1 and species 2 are both present;  
+* $\psi_{10}$ is the prob. that species 1 is present and species 2 is absent;
+* $\psi_{01}$ is the prob. that species 1 is absent and species 2 is present;
+* $\psi_{00}$ is the prob. that species 1 and species 2 are both absent,
+with avec $\psi_{11} + \psi_{10} + \psi_{01} + \psi_{00} = 1.$
+
+The marginal probabilities of occupancy are:
+
+* $\Pr(z_1 = 1) = \Pr(\mbox{species 1 is present}) = \psi_{10} + \psi_{11}$
+* $\Pr(z_2 = 1) = \Pr(\mbox{species 2 is present}) = \psi_{01} + \psi_{11}$
+* $\Pr(z_1 = 0) = \Pr(\mbox{species 1 is absent}) = \psi_{01} + \psi_{00}$
+* $\Pr(z_2 = 0) = \Pr(\mbox{species 2 is absent}) = \psi_{10} + \psi_{00}$
+
+And the conditional probabilities (reminder: $\Pr(\mbox{A|B}) = \Pr(\mbox{A and B})/\Pr(\mbox{B})$):
+
+* $\Pr(z_1 = 1 | z_2 = 0) = \psi_{10} / (\psi_{10} + \psi_{00}) = \Pr(\mbox{species 1 is present given species 2 is absent});$
+* $\Pr(z_1 = 1 | z_2 = 1) = \psi_{11} / (\psi_{11} + \psi_{01}) = \Pr(\mbox{species 1 is present given species 2 is present});$
+* $\Pr(z_2 = 1 | z_1 = 0) = \psi_{01} / (\psi_{01} + \psi_{00}) = \Pr(\mbox{species 2 is present given species 1 is absent});$
+* $\Pr(z_2 = 1 | z_1 = 1) = \psi_{11} / (\psi_{11} + \psi_{10}) = \Pr(\mbox{species 2 is present given species 1 is present}).$
+
+It is important to note that the function `occuMulti` in `unmarked` doesn't work directly on the occupancy probabilities but on the so-called natural parameters (in that specific order): 
+
+* $f_1 = \log(\psi_{10}/\psi_{00})$;
+* $f_2 = \log(\psi_{01}/\psi_{00})$;
+* $f_{12} = \log(\psi_{00}\psi_{11} / \psi_{10}\psi_{01})$, 
+
+that is:
+
+* $\psi_{11} = \exp(f_1+f_2+f_{12})/\mbox{den}$;
+* $\psi_{10} = \exp(f_1)/\mbox{den}$;
+* $\psi_{01} = \exp(f_2)/\mbox{den}$,
+where $\mbox{den} = 1+\exp(f_1)+\exp(f_2)+\exp(f_1+f_2+f_{12})$:
+
+## Analyses with `unmarked`
+
+Load `unmarked` awesome package. 
+```{r}
+library(unmarked)
+```
+
+Format data.
+```{r}
+y <- list(y_dolphin, y_fishing)
+names(y) <- c('dolphin','fishing')
+
+ind_effort <- apply(effort, 1, sum)
+cov_effort <- effort[ ind_effort!=0, ]
+st_effort <- matrix(scale(cov_effort), ncol = 4)
+det_covs <- list()
+det_covs[[1]] <- st_effort
+det_covs[[2]] <- st_effort
+names(det_covs) <- paste('det_cov',1:2,sep='')
+
+data <- unmarkedFrameOccuMulti(y = y, obsCovs = det_covs) #,siteCovs=occ_covs,obsCovs=det_covs)
+```
+
+Summary stats.
+```{r}
+summary(data)
+```
+
+
+Visualize.
+```{r}
+plot(data)
+```
+
+Specific effects on parameters. Natural parameters are constant, detection probabilities are species-species, and a function of the sampling effort. 
+```{r}
+occFormulas <- c('~1','~1','~1') 
+detFormulas <- c('~det_cov1','~det_cov2')
+```
+
+Fit model. 
+```{r}
+fit <- occuMulti(detFormulas, occFormulas, data)
+```
+
+Inspect results.
+```{r}
+fit
+```
+
+Get the natural parameter and detection estimates.
+```{r}
+mle <- fit@opt$par[1:3]
+names(mle) <- c('f1','f2','f12')
+mle
+```
+
+Get the occupancy estimates.
+```{r}
+den <- 1 + exp(mle['f1'])+exp(mle['f2'])+exp(mle['f1']+mle['f2']+mle['f12'])
+(psi11hat <- exp(mle['f1']+mle['f2']+mle['f12'])/den)
+(psi10hat <- exp(mle['f1'])/den)
+(psi01hat <- exp(mle['f2'])/den)
+```
+
+I do it by hand to understand how `unmarked` works. The easy way is to use `predict(fit,'state')`.
+
+Get the detection estimates.
+```{r}
+grid_p <- seq(range(st_effort)[1], range(st_effort)[2], length = 100)
+logit_p1 <- fit@opt$par[4] + fit@opt$par[5] * grid_p
+logit_p2 <- fit@opt$par[6] + fit@opt$par[7] * grid_p
+plot(grid_p, plogis(logit_p1), 
+     type = "l", 
+     col = "#0F4C5C", 
+     lwd = 3, 
+     ylim = c(0,1),
+     xlab = "effort",
+     ylab = "estimated detection probability")
+lines(grid_p, plogis(logit_p2), col = "#5f0f40", lwd = 3)
+legend("topleft", 
+       col = c("#0F4C5C","#5f0f40"), 
+       lty = c(1,1), 
+       lwd = 3, 
+       legend = c("dauphin", "chalutier"))
+```
+
+Marginal occupancy.
+```{r}
+predict(fit,'state',species=1)[1,]
+predict(fit,'state',species=2)[1,]
+```
+
+
+Conditional occupancy.
+```{r}
+predict(fit,'state',species=1,cond='fishing')[1,] # species 1 | species 2 present
+predict(fit,'state',species=1,cond='-fishing')[1,] # species 1 | species 2 absent
+predict(fit,'state',species=2,cond='dolphin')[1,] # species 2 | species 1 present
+predict(fit,'state',species=2,cond='-dolphin')[1,] # species 2 | species 1 absent
+```
+
+## Bayes approach
+
+Let's format the data in a matrix with $N$ rows (sites) and $J$ columns (surveys) with in each cell a `1`, `2`, `3` or `4` for the observation (or event in the capture-recapture terminology) `none species detected`, `species 1 detected`, `species 2 detected` or `both species detected`.
+```{r}
+y_unmarked <- y
+N <- nrow(y_unmarked[[1]])
+J <- ncol(y_unmarked[[1]])
+y_jags <- matrix(NA, nrow = N, ncol = J)
+for (j in 1:N){
+  for (k in 1:J){
+    if (is.na(y_unmarked[[1]][j,k])) next # if cell j is not sampled at occasion k, then next
+    if (y_unmarked[[1]][j,k] == 0 & y_unmarked[[2]][j,k] == 0) y_jags[j,k] <- 1
+    if (y_unmarked[[1]][j,k] == 1 & y_unmarked[[2]][j,k] == 0) y_jags[j,k] <- 2
+    if (y_unmarked[[1]][j,k] == 0 & y_unmarked[[2]][j,k] == 1) y_jags[j,k] <- 3
+    if (y_unmarked[[1]][j,k] == 1 & y_unmarked[[2]][j,k] == 1) y_jags[j,k] <- 4
+  }
+}
+head(y_jags, 25)
+```
+
+### Model w/ constant natural parameters, and detection function of sampling effort plus dolphin detection function of pres/abs of fishing boats
+
+The natural parameters are constant. The detection probabilities for both dolphins and fishing boats depend on the sampling effort (sites and occasions), and the dolphin detection probability is function of the presence/absence of the fishing boats. On the latter, we used the formulation in Waddle et al. 2010 (page 1470) and more precisely:
+
+$$\mbox{logit}(\Pr(\mbox{dolphin is detected} | \mbox{dolphin is present})) = \beta_1 z_{\mbox{fishing boats}} + \beta_2 (1 - z_{\mbox{fishing boats}}) + \beta_3 \mbox{sampling effort}$$
+
+
+
+Specify model in BUGS language. 
+```{r}
+model <- function() { 
+  
+  ## state process
+  for(j in 1:nsite) {
+    z[j] ~ dcat(psi[1:4])
+  }
+  
+  # occupancy probabilities
+  psi[1] <- 1 / (1 + sum(prop[1:3])) # unoccupied
+  psi[2] <- prop[1] / (1 + sum(prop[1:3])) # occupied by species A and not B
+  psi[3] <- prop[2] / (1 + sum(prop[1:3])) # occupied by species B and not A
+  psi[4] <- prop[3] / (1 + sum(prop[1:3])) # occupied by both species A and B
+  
+  ## observation process
+  for(j in 1:nsite) {
+    for(k in 1:nyear) {
+      y[j, k] ~ dcat(obs[j, k, 1:4, z[j]])
+    }
+  }
+  
+  # detection matrix with obs for observations and state = true states
+  # obs take values:
+  # 1 for none species detected
+  # 2 for species 1 detected
+  # 3 for species 2 detected
+  # 4 for both species detected
+  # given state = unoccupied,
+  for(j in 1:nsite) {
+    for(k in 1:nyear) {
+      obs[j, k, 1, 1] <- 1 # prob obs = 1 
+      obs[j, k, 2, 1] <- 0 # prob obs = 2
+      obs[j, k, 3, 1] <- 0 # prob obs = 3
+      obs[j, k, 4, 1] <- 0 # prob obs = 4
+      # given state = occupied by species A and not B,
+      obs[j, k, 1, 2] <- 1 - pA[j, k] # prob obs = 1
+      obs[j, k, 2, 2] <- pA[j, k] # prob obs = 2
+      obs[j, k, 3, 2] <- 0 # prob obs = 3
+      obs[j, k, 4, 2] <- 0 # prob obs = 4
+      # given state = occupied by species B and not A,
+      obs[j, k, 1, 3] <- 1 - pB[j, k] # prob obs = 1
+      obs[j, k, 2, 3] <- 0 # prob obs = 2
+      obs[j, k, 3, 3] <- pB[j, k] # prob obs = 3
+      obs[j, k, 4, 3] <- 0 # prob obs = 4
+      # given state = occupied by both species A and B,
+      obs[j, k, 1, 4] <- (1 - pA[j, k]) * (1 - pB[j, k]) # prob obs = 1
+      obs[j, k, 2, 4] <- pA[j, k] * (1 - pB[j, k]) # prob obs = 2
+      obs[j, k, 3, 4] <- (1 - pA[j, k]) * pB[j, k] # prob obs = 3
+      obs[j, k, 4, 4] <- pA[j, k] * pB[j, k] # prob obs = 4
+    }
+  }  
+  ## priors for...
+  # occupancy probabilities
+  for (i in 1:3){
+    log(prop[i]) <- theta[i] 
+    theta[i] ~ dnorm(0,1) 
+  }
+  # detection probabilities (pA function of pres/abs of B, as in Waddle et al 2010 page 1470)
+  for(j in 1:nsite) {
+    B_present[j] <- equals(z[j], 3) + equals(z[j], 4)
+    for(k in 1:nyear) {
+      logit(pA[j, k]) <- beta[1] * B_present[j] + beta[2] * (1 - B_present[j]) + beta[3] * eff[j, k] 
+      logit(pB[j, k]) <- beta[4] + beta[5] * eff[j, k]
+    }
+  }
+  for (i in 1:5){
+    beta[i] ~ dnorm(0,1)
+  }
+}
+```
+
+Specify data, initial values, parameters to be monitored and various MCMC details:
+```{r}
+data <- list(y = y_jags, 
+             nsite = dim(y_jags)[1], 
+             nyear = dim(y_jags)[2],
+             eff = st_effort)
+```
+
+Initial values.
+```{r}
+zinit <- apply(data$y, 1, max, na.rm = TRUE)
+zinit[zinit==3] <- 4
+inits <- function() {list(z = zinit, 
+                          beta = rnorm(5, 0, 1), 
+                          theta = rnorm(3, 0, 1))}
+```
+
+Parameters to be monitored.
+```{r}
+params <- c("prop","theta","beta")
+```
+
+MCMC settings
+```{r}
+ni <- 10000
+nb <- 2500
+nc <- 2
+```
+
+Run `Jags` from `R`:
+```{r}
+library(R2jags)
+ptm <- proc.time()
+out <- jags(data = data, 
+            inits = inits, 
+            parameters.to.save = params, 
+            model.file = model, 
+            n.chains = nc, 
+            n.iter = ni, 
+            n.burnin = nb)
+time <- proc.time() -  ptm
+time # 1.5 minutes
+```
+
+Save run.
+```{r}
+save(out, file = "run_gdegem.RData")
+```
+
+Check convergence.
+```{r}
+jagsfit.mcmc <- coda::as.mcmc(out$BUGSoutput$sims.matrix)
+library(lattice)
+xyplot(jagsfit.mcmc, layout = c(4,3))
+```
+
+Posterior densities.
+```{r}
+densityplot(jagsfit.mcmc)
+```
+
+Print results.
+```{r}
+print(out,digits = 2)
+```
+
+Get posterior medians of relevant parameters.
+
+Start w/ occupancy.
+```{r}
+prop1 <- c(out$BUGSoutput$sims.array[,,'prop[1]'])
+prop2 <- c(out$BUGSoutput$sims.array[,,'prop[2]'])
+prop3 <- c(out$BUGSoutput$sims.array[,,'prop[3]'])
+psi1 <- plogis(prop1) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+psi2 <- plogis(prop2) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+psi3 <- plogis(prop3) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+psi0 <- 1 - (psi1 + psi2 + psi3)
+# res
+res <- data.frame(post_median = c(median(psi0),
+                                median(psi1), 
+                                median(psi2), 
+                                median(psi3)))
+rownames(res) <- c('psi00','psi10','psi01','psi11')
+round(res,3)
+```
+
+
+Marginal probabilities.
+```{r}
+median(psi1 + psi3) # Pr(dolphin present)
+median(psi2 + psi3) # Pr(fishing present)
+median(psi2 + psi0) # Pr(dolphin absent)
+median(psi1 + psi0) # Pr(fishing absent)
+```
+
+
+Conditional probabilities.
+```{r}
+median(psi1 / (psi1 + psi0)) # Pr(dolphin present | fishing absent) ?= Pr(dolphin present)
+median(psi3 / (psi3 + psi2)) # Pr(dolphin present | fishing present) ?= Pr(dolphin present)
+median(psi2 / (psi2 + psi0)) # Pr(fishing present | dolphin absent) = Pr(fishing)
+median(psi3 / (psi3 + psi1)) # Pr(fishing present | dolphin present) = Pr(fishing)
+```
+
+Detection.
+```{r}
+beta1 <- c(out$BUGSoutput$sims.array[,,'beta[1]'])
+beta2 <- c(out$BUGSoutput$sims.array[,,'beta[2]'])
+beta3 <- c(out$BUGSoutput$sims.array[,,'beta[3]'])
+
+beta4 <- c(out$BUGSoutput$sims.array[,,'beta[4]'])
+beta5 <- c(out$BUGSoutput$sims.array[,,'beta[5]'])
+
+grid_p <- seq(range(data$eff)[1], range(data$eff)[2], length = 100)
+logit_p12 <- median(beta1) + median(beta3) * grid_p
+logit_p12bar <- median(beta2) + median(beta3) * grid_p
+logit_p2 <- median(beta4) + median(beta5) * grid_p
+plot(grid_p, plogis(logit_p12), 
+     type = "l", 
+     col = "#0F4C5C", 
+     lwd = 3, 
+     ylim = c(0,1),
+     xlab = "effort (km parcouru)",
+     ylab = "probabilité estimée",
+     main = "probabilité de détection pour un...")
+lines(grid_p, plogis(logit_p12bar), col = "#0F4C5C", lwd = 3, lty = 2)
+lines(grid_p, plogis(logit_p2), col = "#5f0f40", lwd = 3)
+legend("topleft", 
+       col = c("#0F4C5C","#0F4C5C", "#5f0f40"), 
+       lty = c(1,2, 1), 
+       lwd = 3, 
+       legend = c("dauphin cond présence chalutier", 
+                  "dauphin cond absence chalutier",
+                  "chalutier"))
+```
+
+Instead of the Waddle's formulation, I would have used $\alpha_1 + \alpha_2 z_{\mbox{fishing boats}}$ so that:
+
+* B present implies $\alpha_1 + \alpha_2 = \beta_1$
+* B absent implies $\alpha_1 = \beta_2$
+
+which gives $\alpha_2 = \beta_1 - \beta_2$.
+
+Let's have a look.
+```{r}
+alpha2 <- beta1 - beta2
+mean(alpha2)
+median(alpha2)
+quantile(alpha2, probs = c(2.5, 97.5) / 100)
+```
+
+A histogram.
+```{r}
+hist(alpha2, main = "", xlab = "effet pres/abs chalutier sur detection dauphin")
+mean(alpha2 > 0)
+```
+
+Another way to formally test for the effect of the presence/absence of fishing boats on the detection of dolphins is to compare this model with a model without this effect, using the DIC or the WAIC for example. 
+
+### Model w/ constant natural parameters, and detection function of sampling effort 
+
+```{r}
+model2 <- function() { 
+  
+  ## state process
+  for(j in 1:nsite) {
+    z[j] ~ dcat(psi[1:4])
+  }
+  
+  # occupancy probabilities
+  psi[1] <- 1 / (1 + sum(prop[1:3])) # unoccupied
+  psi[2] <- prop[1] / (1 + sum(prop[1:3])) # occupied by species A and not B
+  psi[3] <- prop[2] / (1 + sum(prop[1:3])) # occupied by species B and not A
+  psi[4] <- prop[3] / (1 + sum(prop[1:3])) # occupied by both species A and B
+  
+  ## observation process
+  for(j in 1:nsite) {
+    for(k in 1:nyear) {
+      y[j, k] ~ dcat(obs[j, k, 1:4, z[j]])
+    }
+  }
+  
+  # detection matrix with obs for observations and state = true states
+  # obs take values:
+  # 1 for none species detected
+  # 2 for species 1 detected
+  # 3 for species 2 detected
+  # 4 for both species detected
+  # given state = unoccupied,
+  for(j in 1:nsite) {
+    for(k in 1:nyear) {
+      obs[j, k, 1, 1] <- 1 # prob obs = 1 
+      obs[j, k, 2, 1] <- 0 # prob obs = 2
+      obs[j, k, 3, 1] <- 0 # prob obs = 3
+      obs[j, k, 4, 1] <- 0 # prob obs = 4
+      # given state = occupied by species A and not B,
+      obs[j, k, 1, 2] <- 1 - pA[j, k] # prob obs = 1
+      obs[j, k, 2, 2] <- pA[j, k] # prob obs = 2
+      obs[j, k, 3, 2] <- 0 # prob obs = 3
+      obs[j, k, 4, 2] <- 0 # prob obs = 4
+      # given state = occupied by species B and not A,
+      obs[j, k, 1, 3] <- 1 - pB[j, k] # prob obs = 1
+      obs[j, k, 2, 3] <- 0 # prob obs = 2
+      obs[j, k, 3, 3] <- pB[j, k] # prob obs = 3
+      obs[j, k, 4, 3] <- 0 # prob obs = 4
+      # given state = occupied by both species A and B,
+      obs[j, k, 1, 4] <- (1 - pA[j, k]) * (1 - pB[j, k]) # prob obs = 1
+      obs[j, k, 2, 4] <- pA[j, k] * (1 - pB[j, k]) # prob obs = 2
+      obs[j, k, 3, 4] <- (1 - pA[j, k]) * pB[j, k] # prob obs = 3
+      obs[j, k, 4, 4] <- pA[j, k] * pB[j, k] # prob obs = 4
+    }
+  }  
+  ## priors for...
+  # occupancy probabilities
+  for (i in 1:3){
+    log(prop[i]) <- theta[i] 
+    theta[i] ~ dnorm(0,1) 
+  }
+  # detection probabilities (pA function of pres/abs of B, as in Waddle et al 2010 page 1470)
+  for(j in 1:nsite) {
+    for(k in 1:nyear) {
+      logit(pA[j, k]) <- beta[1] + beta[2] * eff[j, k] 
+      logit(pB[j, k]) <- beta[3] + beta[4] * eff[j, k]
+    }
+  }
+  for (i in 1:4){
+    beta[i] ~ dnorm(0,1)
+  }
+}
+```
+
+Initial values.
+```{r}
+zinit <- apply(data$y, 1, max, na.rm = TRUE)
+zinit[zinit==3] <- 4
+inits <- function() {list(z = zinit, 
+                          beta = rnorm(4, 0, 1), 
+                          theta = rnorm(3, 0, 1))}
+```
+
+Parameters to be monitored.
+```{r}
+params <- c("prop","theta","beta")
+```
+
+MCMC settings
+```{r}
+ni <- 10000
+nb <- 2500
+nc <- 2
+```
+
+Run `Jags` from `R`.
+```{r}
+library(R2jags)
+ptm <- proc.time()
+out2 <- jags(data = data, 
+            inits = inits, 
+            parameters.to.save = params, 
+            model.file = model2, 
+            n.chains = nc, 
+            n.iter = ni, 
+            n.burnin = nb)
+x2 <- proc.time() -  ptm
+x2 # 15 minutes
+save(x2, out2, file = "runwochalutier_gdegem.RData")
+```
+
+Check convergence.
+```{r}
+jagsfit.mcmc <- as.mcmc(out2$BUGSoutput$sims.matrix)
+library(lattice)
+xyplot(jagsfit.mcmc, layout=c(4,3))
+```
+
+Print results.
+```{r}
+print(out2,digits = 2)
+```
+
+Compare the DIC values of the two models, and conclude. Needs to run the models with many more iterations. 
+
+We're almost there. The only issue we have is tha we cannot really make a nice map of the probability of co-occurrence of dolphins and fishing boats. My suggestion is to go for a model with lat/long in the model in a non-parametric relationship. 
+
+### Model w/ constant natural parameters, and GAM sur lat/long; detection is function of sampling effort plus dolphin detection function of pres/abs of fishing boats
+
+Get the ingredients for GAMs using package `jagam` developed by Simon Wood and basically hacks what is built by the package `mgcv`. 
+```{r}
+yy_dolphin <- apply(y_dolphin, 1, max, na.rm = TRUE)
+coordx <- coord[,1]
+coordy <- coord[,2]
+library(mgcv)
+res <- jagam(yy_dolphin ~ s(coordx, coordy, bs = "gp"), 
+            family = "binomial",
+            file = "psi.txt") # same structure for fishing boats and both together
+#save(res, file = 'jagam.RData')
+```
+
+<!-- # model { -->
+<!-- #   eta <- X %*% b ## linear predictor -->
+<!-- #   for (i in 1:n) { mu[i] <-  ilogit(eta[i]) } ## expected response -->
+<!-- #   for (i in 1:n) { y[i] ~ dbin(mu[i],w[i]) } ## response  -->
+<!-- #   ## Parametric effect priors CHECK tau=1/10^2 is appropriate! -->
+<!-- #   for (i in 1:1) { b[i] ~ dnorm(0,0.01) } -->
+<!-- #   ## prior for s(coordx,coordy)...  -->
+<!-- #   K1 <- S1[1:32,1:32] * lambda[1]  + S1[1:32,33:64] * lambda[2] -->
+<!-- #   b[2:33] ~ dmnorm(zero[2:33],K1)  -->
+<!-- #   ## smoothing parameter priors CHECK... -->
+<!-- #   for (i in 1:2) { -->
+<!-- #     lambda[i] ~ dgamma(.05,.005) -->
+<!-- #     rho[i] <- log(lambda[i]) -->
+<!-- #   } -->
+<!-- # } -->
+
+
+Specify model in BUGS language. 
+```{r}
+model <- function() { 
+  
+  ## state process
+  for(j in 1:nsite) {
+    z[j] ~ dcat(psi[j, 1:4])
+  }
+  
+  # occupancy probabilities
+  for(j in 1:nsite) {
+    psi[j, 1] <- 1 / (1 + sum(prop[j, 1:3])) # unoccupied
+    psi[j, 2] <- prop[j, 1] / (1 + sum(prop[j, 1:3])) # occupied by species A and not B
+    psi[j, 3] <- prop[j, 2] / (1 + sum(prop[j, 1:3])) # occupied by species B and not A
+    psi[j, 4] <- prop[j, 3] / (1 + sum(prop[j, 1:3])) # occupied by both species A and B
+  }
+  
+  ## observation process
+  for(j in 1:nsite) {
+    for(k in 1:nyear) {
+      y[j, k] ~ dcat(obs[j, k, 1:4, z[j]])
+    }
+  }
+  
+  # detection matrix with obs for observations and state = true states
+  # obs take values:
+  # 1 for none species detected
+  # 2 for species 1 detected
+  # 3 for species 2 detected
+  # 4 for both species detected
+  # given state = unoccupied,
+  for(j in 1:nsite) {
+    for(k in 1:nyear) {
+      obs[j, k, 1, 1] <- 1 # prob obs = 1 
+      obs[j, k, 2, 1] <- 0 # prob obs = 2
+      obs[j, k, 3, 1] <- 0 # prob obs = 3
+      obs[j, k, 4, 1] <- 0 # prob obs = 4
+      # given state = occupied by species A and not B,
+      obs[j, k, 1, 2] <- 1 - pA[j, k] # prob obs = 1
+      obs[j, k, 2, 2] <- pA[j, k] # prob obs = 2
+      obs[j, k, 3, 2] <- 0 # prob obs = 3
+      obs[j, k, 4, 2] <- 0 # prob obs = 4
+      # given state = occupied by species B and not A,
+      obs[j, k, 1, 3] <- 1 - pB[j, k] # prob obs = 1
+      obs[j, k, 2, 3] <- 0 # prob obs = 2
+      obs[j, k, 3, 3] <- pB[j, k] # prob obs = 3
+      obs[j, k, 4, 3] <- 0 # prob obs = 4
+      # given state = occupied by both species A and B,
+      obs[j, k, 1, 4] <- (1 - pA[j, k]) * (1 - pB[j, k]) # prob obs = 1
+      obs[j, k, 2, 4] <- pA[j, k] * (1 - pB[j, k]) # prob obs = 2
+      obs[j, k, 3, 4] <- (1 - pA[j, k]) * pB[j, k] # prob obs = 3
+      obs[j, k, 4, 4] <- pA[j, k] * pB[j, k] # prob obs = 4
+    }
+  }  
+  ## priors for...
+  # occupancy probabilities
+  for(j in 1:nsite) {
+    log(prop[j, 1]) <- theta1[j] 
+    log(prop[j, 2]) <- theta2[j] 
+    log(prop[j, 3]) <- theta3[j]
+  }
+  
+  theta1 <- X %*% b1 ## linear predictor
+  theta2 <- X %*% b2 ## linear predictor
+  theta3 <- X %*% b3 ## linear predictor
+
+    b1[1] ~ dnorm(0,0.01) 
+    b2[1] ~ dnorm(0,0.01) 
+    b3[1] ~ dnorm(0,0.01) 
+
+  ## prior for s(coordx,coordy)... 
+  K11 <- S1[1:32,1:32] * lambda[1, 1]  + S1[1:32,33:64] * lambda[2, 1]
+  K12 <- S1[1:32,1:32] * lambda[1, 2]  + S1[1:32,33:64] * lambda[2, 2]
+  K13 <- S1[1:32,1:32] * lambda[1, 3]  + S1[1:32,33:64] * lambda[2, 3]
+  b1[2:33] ~ dmnorm(zero[2:33], K11) 
+  b2[2:33] ~ dmnorm(zero[2:33], K12) 
+  b3[2:33] ~ dmnorm(zero[2:33], K13) 
+  ## smoothing parameter priors CHECK...
+  for (i in 1:2) {
+    for (kk in 1:3){
+      lambda[i, kk] ~ dgamma(.05,.005)
+      rho[i, kk] <- log(lambda[i, kk])
+    }
+  }
+
+  # detection probabilities (pA function of pres/abs of B, as in Waddle et al 2010 page 1470)
+  for(j in 1:nsite) {
+    B_present[j] <- equals(z[j], 3) + equals(z[j], 4)
+    for(k in 1:nyear) {
+      logit(pA[j, k]) <- beta[1] * B_present[j] + beta[2] * (1 - B_present[j]) + beta[3] * eff[j, k] 
+      logit(pB[j, k]) <- beta[4] + beta[5] * eff[j, k]
+    }
+  }
+  for (i in 1:5){
+    beta[i] ~ dnorm(0,1)
+  }
+}
+```
+
+
+Specify data, initial values, parameters to be monitored and various MCMC details.
+```{r}
+# data
+data <- list(y = y_jags, 
+             nsite = dim(y_jags)[1], 
+             nyear = dim(y_jags)[2],
+             eff = st_effort,
+             X = res$jags.data$X, 
+             S1 = res$jags.data$S1,
+             zero = res$jags.data$zero)
+
+# initial values
+zinit <- apply(data$y, 1, max, na.rm = TRUE)
+zinit[zinit==3] <- 4
+inits <- function() {list(z = zinit, 
+                          beta = rnorm(5, 0, 1), 
+                          lambda = cbind(res$jags.ini$lambda, res$jags.ini$lambda, res$jags.ini$lambda),
+                          b1 = res$jags.ini$b,
+                          b2 = res$jags.ini$b,
+                          b3 = res$jags.ini$b)}
+
+# parameters monitored
+params <- c("beta", "b1", "b2", "b3", "lambda")
+
+# MCMC settings
+ni <- 25000
+nb <- 5000
+nc <- 2
+```
+
+
+Run `Jags` from `R`.
+```{r}
+library(R2jags)
+ptm <- proc.time()
+out <- jags(data = data, 
+            inits = inits, 
+            parameters.to.save = params, 
+            model.file = model, 
+            n.chains = nc, 
+            n.iter = ni, 
+            n.burnin = nb)
+x <- proc.time() -  ptm
+x # 9 minutes
+```
+
+Save run.
+```{r}
+save(x, out, file = "runGAMgdegem.RData")
+```
+
+Check convergence:
+```{r}
+jagsfit.mcmc <- as.mcmc(out$BUGSoutput$sims.matrix)
+```
+
+Print results.
+```{r}
+print(out,digits = 2)
+```
+
+Get detection estimates. 
+```{r}
+beta1 <- c(out$BUGSoutput$sims.array[,,'beta[1]'])
+beta2 <- c(out$BUGSoutput$sims.array[,,'beta[2]'])
+beta3 <- c(out$BUGSoutput$sims.array[,,'beta[3]'])
+
+beta4 <- c(out$BUGSoutput$sims.array[,,'beta[4]'])
+beta5 <- c(out$BUGSoutput$sims.array[,,'beta[5]'])
+
+grid_p <- seq(range(data$eff)[1], range(data$eff)[2], length = 100)
+logit_p12 <- median(beta1) + median(beta3) * grid_p
+logit_p12bar <- median(beta2) + median(beta3) * grid_p
+logit_p2 <- median(beta4) + median(beta5) * grid_p
+plot(grid_p, plogis(logit_p12), 
+     type = "l", 
+     col = "#0F4C5C", 
+     lwd = 3, 
+     ylim = c(0,1),
+     xlab = "effort (km parcouru)",
+     ylab = "probabilité estimée",
+     main = "probabilité de détection pour un...")
+lines(grid_p, plogis(logit_p12bar), col = "#0F4C5C", lwd = 3, lty = 2)
+lines(grid_p, plogis(logit_p2), col = "#5f0f40", lwd = 3)
+legend("topleft", 
+       col = c("#0F4C5C","#0F4C5C", "#5f0f40"), 
+       lty = c(1,2, 1), 
+       lwd = 3, 
+       legend = c("dauphin cond présence chalutier", 
+                  "dauphin cond absence chalutier",
+                  "chalutier"))
+```
+
+Let's build a nice map of the co-occurrence of dolphins and fishing boats. 
+
+First, get the whole grid. 
+```{r}
+grid_coord <- st_read("Grid/grid.shp") %>% 
+  st_transform(crs = st_crs(pays)) %>%
+  st_crop(xmin = 700000, xmax = 900000, ymin = 6140000, ymax = 6300000) %>%
+  st_centroid() %>%
+  st_coordinates() %>%
+  as_tibble() %>%
+  mutate(easting = (X - meanX)/sdX,
+         northing = (Y - meanY)/sdY)
+
+grid_coord <-  grid %>%
+  st_centroid() %>%
+  st_coordinates() %>%
+  as_tibble() %>%
+  mutate(easting = (X - meanX)/sdX,
+         northing = (Y - meanY)/sdY)
+```
+
+Second, get linear predictor. 
+```{r}
+sm <- smoothCon(s(coordx, coordy, bs = "gp"), 
+                          data = data.frame(coordx = grid_coord$easting, 
+                                            coordy = grid_coord$northing), 
+                          absorb.cons = TRUE) 
+
+Xp <- PredictMat(sm[[1]], data.frame(coordx = grid_coord$easting, 
+                                     coordy = grid_coord$northing))
+Xp <- cbind(1, Xp)
+b1 <- out$BUGSoutput$sims.list$b1
+b2 <- out$BUGSoutput$sims.list$b2
+b3 <- out$BUGSoutput$sims.list$b3
+
+#dim(Xp)
+#dim(b1)
+
+mu1 <- matrix(NA, nrow = nrow(Xp), ncol = nrow(b1))
+mu2 <- matrix(NA, nrow = nrow(Xp), ncol = nrow(b2))
+mu3 <- matrix(NA, nrow = nrow(Xp), ncol = nrow(b3))
+for (i in 1:nrow(b1)){
+  mu1[1:nrow(Xp), i] <- Xp %*% b1[i,]
+  mu2[1:nrow(Xp), i] <- Xp %*% b2[i,]
+  mu3[1:nrow(Xp), i] <- Xp %*% b3[i,]
+}
+```
+
+Third, get occupancy probabilities.
+```{r}
+prop1 <- apply(exp(mu1), 1, mean)
+prop2 <- apply(exp(mu2), 1, mean)
+prop3 <- apply(exp(mu3), 1, mean)
+
+psi1 <- plogis(prop1) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+psi2 <- plogis(prop2) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+psi3 <- plogis(prop3) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+psi0 <- 1 - (psi1 + psi2 + psi3)
+
+# Marginal probabilities.
+#psi1 + psi3 # Pr(dolphin present)
+#psi2 + psi3 # Pr(fishing present)
+#psi2 + psi0 # Pr(dolphin absent)
+#psi1 + psi0 # Pr(fishing absent)
+
+# Conditional probabilities.
+#psi1 / (psi1 + psi0) # Pr(dolphin present | fishing absent) ?= Pr(dolphin present)
+#psi3 / (psi3 + psi2) # Pr(dolphin present | fishing present) ?= Pr(dolphin present)
+#psi2 / (psi2 + psi0) # Pr(fishing present | dolphin absent) = Pr(fishing)
+#psi3 / (psi3 + psi1) # Pr(fishing present | dolphin present) = Pr(fishing)
+```
+
+
+Finally, plot the map!
+```{r}
+df %>%
+  ggplot() + 
+  geom_sf(data = grid, lwd = 0.1, aes(fill = psi3)) +
+  geom_sf(data = pays) + 
+  scale_fill_viridis_c(name = "") +
+  geom_sf(data = grid %>% slice(cooc), fill = "red") + 
+  labs(title = "Probabilité de co-occurrence dauphins et chalutiers", 
+       subtitle = "estimée avec un modèle d'occupancy à 2 espèces",
+       caption = "Source : Données GDEGeM")
+```
+
