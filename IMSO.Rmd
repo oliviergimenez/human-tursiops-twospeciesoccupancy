@@ -16,6 +16,7 @@ library(tidyverse)
 theme_set(theme_light())
 library(sf)
 library(nimble)
+library(patchwork)
 ```
 
 # An ounce of theory
@@ -116,12 +117,17 @@ Let's go for the analysis.
 
 Load grid and occupancy data.
 
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, echo = FALSE}
 load("pays.rdata")
 grid <- st_read("Grid/grid.shp") %>% st_transform(crs = st_crs(pays))
+load("sea.grid.rdata")
+  
 # focus Golfe du Lion
 grid <-  grid %>% st_crop(xmin = 700000, xmax = 900000, ymin = 6140000, ymax = 6300000) 
 pays <- pays %>% st_crop(st_bbox(grid))
+
+sea <- st_transform(sea, crs = st_crs(grid))
+mt <- st_crop(sea,grid)
 
 # SAMM data
 load('msoccu_samm.rdata')
@@ -140,7 +146,7 @@ multioccu_gd$effort <-   st_transform(multioccu_gd$effort, st_crs(grid))
 
 Visualise data.
 
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, echo = FALSE}
 dfS <- bind_rows(multioccu_samm$dauphins %>% add_column(species = "dauphin"), 
           multioccu_samm$chalut %>% add_column(species = "chalutier")) %>% 
   st_crop(st_bbox(grid))
@@ -149,7 +155,7 @@ dfS <- bind_rows(multioccu_samm$dauphins %>% add_column(species = "dauphin"),
 
 Build datasets.
 
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, echo = FALSE}
 # sampling effort
 effortS <- multioccu_samm$effort %>% 
   st_crop(st_bbox(grid)) %>% 
@@ -212,7 +218,7 @@ sdYS <- sd(tempS[,2])
 
 Visualise data.
 
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, echo = FALSE}
 dfG <- bind_rows(multioccu_gd$dauphins %>% add_column(species = "dauphin"), 
           multioccu_gd$chalut %>% add_column(species = "chalutier")) %>% 
   st_crop(st_bbox(grid))
@@ -221,7 +227,7 @@ dfG <- bind_rows(multioccu_gd$dauphins %>% add_column(species = "dauphin"),
 
 Build datasets.
 
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, echo = FALSE}
 # sampling effort
 effortG <- multioccu_gd$effort %>% 
   st_crop(st_bbox(grid)) %>% 
@@ -284,7 +290,7 @@ sdYG <- sd(tempG[,2])
 
 Format data.
 
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, echo = FALSE}
 yS <- list(y_dolphinS, y_fishingS)
 yG <- list(y_dolphinG, y_fishingG)
 names(yS) <- names(yS) <-  c('dolphin','fishing')
@@ -302,12 +308,13 @@ st_effortG <- matrix(scale(cov_effortG), ncol = 4)
 
 Let's format the data in a matrix with $N$ rows (sites) and $J$ columns (surveys) with in each cell a `1:16` for the observation (or event in the capture-recapture terminology) `none species detected`, `species A detected`, `species B detected`, `both species detected` and each of these event by either by SAMM only, by GDEGeM onyl, or by both monitoring programs.
 
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, echo = FALSE}
 str(yS)
 str(yG)
 N <- nrow(yS[[1]])
 J <- ncol(yG[[1]])
 y_jagsS <- y_jagsG <- y_jags <-  matrix(NA, nrow = N, ncol = J)
+
 
 # SAMM
 for (j in 1:N){ #nsites
@@ -376,6 +383,7 @@ for (j in 1:N){ #nsites
 }
 
 # apply mask to remove site without sampling effort from none of the monitoring program
+# revoir
  ind_effort <- apply(y_jags, 1, function(x) all(is.na(x)))
  y <- y_jags[ !ind_effort, ]
  seffG <- st_effortG[ !ind_effort, ]
@@ -395,6 +403,48 @@ for (j in 1:N){ #nsites
  coordMask <- coordG[ !ind_effort, ]
 ```
 
+## Do logistic regressions on detections
+
+```{r}
+# table 
+table(y)
+
+# test with logistic reg
+yG[[1]][is.na(yG[[1]])] <- 0
+yG[[2]][is.na(yG[[2]])] <- 0
+y_turG <- apply(yG[[1]][!ind_effort,],1,max)
+y_fisG <- apply(yG[[2]][!ind_effort,],1,max)
+
+fit <- glm( y_turG ~ as_factor(y_fisG), offset = rowSums(seffG), family =binomial)
+summary(fit)
+```
+
+```{r}
+# samm
+yS[[1]][is.na(yS[[1]])] <- 0
+yS[[2]][is.na(yS[[2]])] <- 0
+y_turS <- apply(yS[[1]][!ind_effort,],1,max)
+y_fisS <- apply(yS[[2]][!ind_effort,],1,max)
+
+sum(y_fisS)
+sum(y_turS)
+fitS <- glm( y_turS ~ as_factor(y_fisS), offset = rowSums(seffS), family =binomial)
+summary(fitS)
+```
+
+```{r}
+# both
+y_tur <- y_turG + y_turS
+y_fis <- y_fisG + y_fisS
+y_tur[y_tur > 1] <- 1
+y_fis[y_fis > 1] <- 1
+
+sum(y_tur)
+sum(y_fis)
+
+fit <- glm( y_tur ~ as_factor(y_fis), offset = rowSums(seffS+ seffG), family =binomial)
+summary(fit)
+```
 
 
 # Full IMSO w/ constant natural parameters, and GAM sur lat/long; detection is function of sampling effort plus dolphin detection function of pres/abs of fishing boats
@@ -408,8 +458,9 @@ yy_dolphin[yy_dolphin >1] <- 1
 
 coordx <- coordMask[,1]
 coordy <- coordMask[,2]
+stbathy <- mt$bathy.sc[!ind_effort,1]
 library(mgcv)
-res <- jagam(yy_dolphin ~ s(coordx, coordy, bs = "gp"), 
+res <- jagam(yy_dolphin ~ s(stbathy) + s(coordx, coordy, bs = "gp"), 
             family = "binomial",
             file = "psi.txt") # same structure for fishing boats and both together
 #save(res, file = 'jagam.RData')
@@ -449,21 +500,19 @@ We do it in NIMBLE because the MCMC run is 10 times faster than that of JAGS.
 
 ## BUGS model
 
-```{r eval = FALSE, include=FALSE }
+```{r eval = FALSE, include=TRUE }
 IMSOfull <- nimbleCode({ 
   
   ## state process
-  for(j in 1:nsite) {
+  for(j in 1:nsite){
     z[j] ~ dcat(psi[j, 1:4])
   }
-  
   # occupancy probabilities
-  for(j in 1:nsite) {
-    psi[j, 1] <- 1 / (1 + sum(prop[j, 1:3])) # unoccupied
-    psi[j, 2] <- prop[j, 1] / (1 + sum(prop[j, 1:3])) # occupied by species A and not B
-    psi[j, 3] <- prop[j, 2] / (1 + sum(prop[j, 1:3])) # occupied by species B and not A
-    psi[j, 4] <- prop[j, 3] / (1 + sum(prop[j, 1:3])) # occupied by both species A and B
-  }
+  
+    psi[1:nsite, 1] <- 1 / (1 + sum(prop[1:nsite, 1:3])) # unoccupied
+    psi[1:nsite, 2] <- prop[1:nsite, 1] / (1 + sum(prop[1:nsite, 1:3])) # occupied by species A and not B
+    psi[1:nsite, 3] <- prop[1:nsite, 2] / (1 + sum(prop[1:nsite, 1:3])) # occupied by species B and not A
+    psi[1:nsite, 4] <- prop[1:nsite, 3] / (1 + sum(prop[1:nsite, 1:3])) # occupied by both species A and B
   
   ## observation process
   for(j in 1:nsite) {
@@ -575,47 +624,58 @@ IMSOfull <- nimbleCode({
     }
   }  
  ## priors for...
-  # occupancy probabilities
-  for(j in 1:nsite) {
+ # occupancy probabilities
+
+ for(j in 1:nsite) {
     log(prop[j, 1]) <- theta1[j] 
     log(prop[j, 2]) <- theta2[j] 
     log(prop[j, 3]) <- theta3[j]
   }
   
-  theta1[1:nsite] <- X[1:279,1:33] %*% b1[1:33] ## linear predictor
-  theta2[1:nsite] <- X[1:279,1:33] %*% b2[1:33] ## linear predictor
-  theta3[1:nsite] <- X[1:279,1:33] %*% b3[1:33] ## linear predictor
+  theta1[1:nsite] <- X[1:nsite,1:33] %*% b1[1:33] ## linear predictor
+  theta2[1:nsite] <- X[1:nsite,1:33] %*% b2[1:33] ## linear predictor
+  theta3[1:nsite] <- X[1:nsite,1:33] %*% b3[1:33] ## linear predictor
 
     b1[1] ~ dnorm(0,0.01) 
     b2[1] ~ dnorm(0,0.01) 
     b3[1] ~ dnorm(0,0.01) 
 
-  ## prior for s(coordx,coordy)... 
-  K11[1:32,1:32] <- S1[1:32,1:32] * lambda[1, 1]  + S1[1:32,33:64] * lambda[2, 1]
-  K12[1:32,1:32] <- S1[1:32,1:32] * lambda[1, 2]  + S1[1:32,33:64] * lambda[2, 2]
-  K13[1:32,1:32] <- S1[1:32,1:32] * lambda[1, 3]  + S1[1:32,33:64] * lambda[2, 3]
-  b1[2:33] ~ dmnorm(zero[2:33], K11[1:32,1:32]) 
-  b2[2:33] ~ dmnorm(zero[2:33], K12[1:32,1:32]) 
-  b3[2:33] ~ dmnorm(zero[2:33], K13[1:32,1:32]) 
-  ## smoothing parameter priors CHECK...
-  for (i in 1:2) {
+ ## prior for s(bathy) 
+  K11[1:9,1:9] <- S1[1:9,1:9] * lambda[1, 1]  + S1[1:9,10:18] * lambda[2, 1]
+  K12[1:9,1:9] <- S1[1:9,1:9] * lambda[1, 2]  + S1[1:9,10:18] * lambda[2, 2]
+  K13[1:9,1:9] <- S1[1:9,1:9] * lambda[1, 3]  + S1[1:9,10:18] * lambda[2, 3]
+  b1[2:10] ~ dmnorm(zero[2:10], K11[1:9,1:9]) 
+  b2[2:10] ~ dmnorm(zero[2:10], K12[1:9,1:9]) 
+  b3[2:10] ~ dmnorm(zero[2:10], K13[1:9,1:9]) 
+
+  ## prior for s(coordx,coordy) 
+  K21[1:32,1:32] <- S2[1:32,1:32] * lambda[3, 1]  + S2[1:32,33:64] * lambda[4, 1]
+  K22[1:32,1:32] <- S2[1:32,1:32] * lambda[3, 2]  + S2[1:32,33:64] * lambda[4, 2]
+  K23[1:32,1:32] <- S2[1:32,1:32] * lambda[3, 3]  + S2[1:32,33:64] * lambda[4, 3]
+  b1[11:42] ~ dmnorm(zero[11:42], K21[1:32,1:32]) 
+  b2[11:42] ~ dmnorm(zero[11:42], K22[1:32,1:32]) 
+  b3[11:42] ~ dmnorm(zero[11:42], K23[1:32,1:32]) 
+  
+  ## smoothing parameter priors
+  for (i in 1:4) {
     for (kk in 1:3){
       lambda[i, kk] ~ dgamma(.05,.005)
       rho[i, kk] <- log(lambda[i, kk])
     }
-  } 
+  }
   # detection probabilities (pA function of pres/abs of B, as in Waddle et al 2010 page 1470)
   # VL: There are four detections probabilities now pAs, pAg, pBg, pBs
   for(j in 1:nsite) {
-     B_present[j] <- equals(z[j], 3) + equals(z[j], 4)
+     B_present[j] <- equals(z[j],3) + equals(z[j],4) #psi[j, 3] + psi[j, 4]
+     
     for(k in 1:nyear) {
-    pAs[j, k] <- exp(beta[1] * B_present[j] + beta[2] * (1 - B_present[j]) + beta[3] * effS[j, k])/(1 + exp(beta[1] * B_present[j] + beta[2] * (1 - B_present[j]) + beta[3] * effS[j, k]))*effindS[j,k]  
+    pAs[j, k] <- (1/(1 + exp(-(beta[1] + beta[2] * B_present[j] + beta[3] * effS[j, k]))))*effindS[j,k]  
     
-    pBs[j, k] <- exp(beta[4] + beta[5] * effS[j, k])/(1 + exp(beta[4] + beta[5] * effS[j, k]))*effindS[j,k] 
+    pBs[j, k] <- (1/(1 + exp(-(beta[4] + beta[5] * effS[j, k]))))*effindS[j,k] 
                                                       
-  pAg[j, k] <- exp(beta[6] * B_present[j] + beta[7] * (1 - B_present[j]) + beta[8] * effG[j, k])/(1 + exp(beta[6] * B_present[j] + beta[7] * (1 - B_present[j]) + beta[8] * effG[j, k])) *effindG[j,k] 
+  pAg[j, k] <- (1/(1 + exp(-(beta[6] + beta[7] *  B_present[j] + beta[8] * effG[j, k])))) *effindG[j,k] 
     
-    pBg[j, k] <- exp(beta[9] + beta[10] * effG[j, k])/(1 + exp(beta[9] + beta[10] * effG[j, k]))*effindG[j,k] 
+    pBg[j, k] <- (1 /(1+ exp(-(beta[9] + beta[10] * effG[j, k]))))*effindG[j,k] 
     
     }
   }
@@ -637,17 +697,36 @@ data <- list(y = y,
              effG = seffG,
              effindS = effindS,
              effindG = effindG,
-             X = res$jags.data$X, # gam para
+              X = res$jags.data$X, # gam para
              S1 = res$jags.data$S1,
+             S2 = res$jags.data$S2,
              zero = res$jags.data$zero)
 
 constants <- list(nsite = dim(y)[1], 
              nyear = dim(y)[2])
 
 # Initial values for z {1:4} have to be consistent with the detection {1:16}
-# To remain simple with put z = 4 as initial value if smth is detected
-zinit <- apply(data$y, 1, max, na.rm = TRUE)
-zinit[zinit>1] <- rep(4,length(zinit[zinit>1]))
+
+zinit <- matrix(NA, nrow = dim(y)[1], ncol = dim(y)[2])
+zinit <- rep(1, dim(y)[1])
+
+y[is.na(y)] <- 1
+for (i in 1:dim(y)[1]){
+  d <- f <- b <- 0
+  for(j in 1:dim(y)[2]){
+    if (y[i,j] == 2 | y[i,j] == 5 | y[i,j] == 6) {d <- 1}
+    if (y[i,j] == 3 | y[i,j] == 9 | y[i,j] == 11) {f <- 1} 
+    if (y[i,j] == 4 | y[i,j] == 7 | y[i,j] == 8 | y[i,j] == 10 | y[i,j] == 12
+        | y[i,j] == 13 | y[i,j] == 14 | y[i,j] == 15| y[i,j] == 16 ) {b <- 1}
+    } #j
+  if(d == 1 & f == 0 & b == 0) {zinit[i] <- 2}
+  if(d == 0 & f == 1 & b == 0) {zinit[i] <- 3}
+  if(b == 1) {zinit[i] <- 4}
+  if(d == 1 & f ==1) {zinit[i] <- 4}
+}#i
+
+# table
+table(zinit)
 
 inits <- list(z = zinit, 
               beta = rnorm(10, 0, 1), 
@@ -659,27 +738,38 @@ inits <- list(z = zinit,
 
 ## Build model
 
-```{r eval = FALSE, include=FALSE}
+```{r eval = FALSE, include=TRUE}
 Rmodel <- nimbleModel(IMSOfull, constants, data, inits)
 Rmodel$initializeInfo()
-Rmodel$calculate() # _1813.923
+Rmodel$calculate() # _1736.923
 
 conf <- configureMCMC(Rmodel)
 conf$printMonitors() 
-conf$addMonitors("prop")
+conf$addMonitors("z")
 
 conf$printSamplers(byType= TRUE)
+
+  # RWblock sampler
+  conf$removeSampler(target = c("beta"))
+  conf$addSampler(target = c("beta[1]","beta[2]","beta[3]"), type = "RW_block")
+  conf$addSampler(target = c("beta[4]","beta[5]"), type = "RW_block")
+  conf$addSampler(target = c("beta[6]","beta[7]","beta[8]"), type = "RW_block")
+  conf$addSampler(target = c("beta[9]","beta[10]"), type = "RW_block")
+
+  conf$printSamplers(byType= TRUE)
+
 
   # Build and compile MCMC
   Rmcmc <- buildMCMC(conf)
   Cmodel <- compileNimble(Rmodel)
   Cmcmc <- compileNimble(Rmcmc, project = Cmodel)
   
-   t <- system.time(samples2 <- runMCMC(Cmcmc, niter = 5000, nburnin = 1000, nchains = 3, samplesAsCodaMCMC = TRUE))
+   t <- system.time(samples2 <- runMCMC(Cmcmc, niter = 1000000, nburnin = 40000, nchains = 2, thin = 5, samplesAsCodaMCMC = TRUE))
    #ART nit = 5000 nb = 1000, nc = 3, t = 185 sec
   
 str(samples2)
-save(samples2, file ="IMSO5kit.rdata")
+code = Rmodel$getCode()
+save(samples2, code, file ="IMSO_1Mit.rdata")
 
 ```
 
@@ -687,10 +777,10 @@ save(samples2, file ="IMSO5kit.rdata")
 
 Convergence checkings
 
-```{r}
+```{r echo=FALSE}
 library(coda)
 
-load("IMSO5kit.rdata")
+load("IMSO_1Mit.rdata")
 
 den <- mcmcplots::denplot(as.mcmc.list(samples2[,c(
 "beta[1]","beta[2]",
@@ -698,6 +788,13 @@ den <- mcmcplots::denplot(as.mcmc.list(samples2[,c(
 "beta[5]","beta[6]",
 "beta[7]","beta[8]",
 "beta[9]")]))
+
+mcmcplots::denplot(as.mcmc.list(samples2[,c(
+"lambda[1, 1]","lambda[2, 1]",
+"lambda[3, 1]","lambda[4, 1]",
+"lambda[1, 2]","lambda[2, 2]",
+"lambda[3, 2]","lambda[4, 3]",
+"lambda[3, 3]")]))
 
 if(FALSE){
 tra <- mcmcplots::traplot(as.mcmc.list(samples2[,c(
@@ -708,9 +805,23 @@ tra <- mcmcplots::traplot(as.mcmc.list(samples2[,c(
 "beta[9]")]))
 }
 
+if(FALSE){
+# effSize
+ess <- apply(samples2$chain1,2, effectiveSize)
+ess2 <- apply(samples2$chain2,2, effectiveSize)
+
+essT <- ess + ess2
+min(essT)
+# z obs 
+table(zinit)
+# z est 
+samples <- rbind(samples2[[1]], samples2[[2]])
+Best <- samples[,1:279]
+table(apply(Best,2,median))
+}
 ```
 
-```{r}
+```{r include=FALSE}
 beta1 <- c(samples2$chain1[, 'beta[1]'] , samples2$chain2[, 'beta[1]'],samples2$chain3[, 'beta[1]'])
 beta2 <- c(samples2$chain1[, 'beta[2]'] , samples2$chain2[, 'beta[2]'],samples2$chain3[, 'beta[2]'])
 beta3 <- c(samples2$chain1[, 'beta[3]'] , samples2$chain2[, 'beta[3]'],samples2$chain3[, 'beta[3]'])
@@ -721,43 +832,18 @@ beta7 <- c(samples2$chain1[, 'beta[7]'] , samples2$chain2[, 'beta[7]'],samples2$
 beta8 <- c(samples2$chain1[, 'beta[8]'] , samples2$chain2[, 'beta[8]'],samples2$chain3[, 'beta[8]'])
 beta9 <- c(samples2$chain1[, 'beta[9]'] , samples2$chain2[, 'beta[9]'],samples2$chain3[, 'beta[9]'])
 beta10 <- c(samples2$chain1[,'beta[10]'], samples2$chain2[,'beta[10]'],samples2$chain3[,'beta[10]'])
-```
 
-```{r echo=FALSE}
-# plot conditionnal prob à faire
-grid_p <- seq(range(seffS)[1], range(seffS)[2], length = 100) 
-grid_pg <- seq(range(seffG)[1], range(seffG)[2], length = 100) 
-
-# Samm
-logit_p12 <- median(beta1) + median(beta3) * grid_p # presence chalutier
-logit_p12bar <- median(beta2) + median(beta3) * grid_p # absence chalutier
-logit_p2 <- median(beta4) + median(beta5) * grid_p # prob chalutier
-
-probS <- ggplot()+ 
-  geom_line(aes(x = grid_p, y = plogis(logit_p12), color = "dauphin cond présence chalutier"),  lwd = 1) + 
-  geom_line(aes(x = grid_p, y = plogis(logit_p12bar), color = "dauphin cond absence chalutier"), lwd = 1) + 
-  geom_line(aes(x = grid_p, y = plogis(logit_p2), color = "chalutier"), lwd = 1) +
-  scale_color_manual(values = c("dauphin cond présence chalutier" = "#fb8b24", "dauphin cond absence chalutier" = "#0f4c5c" , "chalutier" = "#9a031e")) + 
-  xlab("effort (km parcouru)") + ylab("probabilité estimée") + labs(title = "SAMM : probabilité de détection pour un...")  + geom_text(aes(x = c(-1,-1,-1),y=c(0.8,0.7,0.6),label= c(paste("Chalut = ", round(median(beta4),2)),paste("Ab = ", round(median(beta2),2)),paste("Pres = ", round(median(beta1),2)))), vjust = "inward") + theme(legend.position = "none")
-
-# Gdegem
-logit_p12g <- median(beta6) + median(beta8) * grid_p # presence chalutier
-logit_p12barg <- median(beta7) + median(beta8) * grid_p # absence chalutier
-logit_p2g <- median(beta9) + median(beta10) * grid_p # prob chalutier
-
-
-probG <- ggplot()+ 
-  geom_line(aes(x = grid_pg, y = plogis(logit_p12g), color = "dauphin cond présence chalutier"),  lwd = 1) + 
-  geom_line(aes(x = grid_pg, y = plogis(logit_p12barg), color = "dauphin cond absence chalutier"), lwd = 1) + 
-  geom_line(aes(x = grid_pg, y = plogis(logit_p2g), color = "chalutier"), lwd = 1) +
-  scale_color_manual(values = c("dauphin cond présence chalutier" = "#fb8b24", "dauphin cond absence chalutier" = "#0F4C5C" , "chalutier" = "#9a031e")) + 
-  xlab("effort (km parcouru)") + ylab("probabilité estimée") + labs(title = "GDEGeM : probabilité de détection pour un...", color = "Legend") + geom_text(aes(x = c(-1,-1,-1),y=c(0.8,0.7,0.6),label= c(paste("Chalut = ", round(median(beta9),2)),paste("Ab = ", round(median(beta7),2)),paste("Pres = ", round(median(beta6),2)))), vjust = "inward")
-
+beta <- bind_cols(values = c(beta1, beta2,beta3,beta4,beta5,
+                             beta6, beta7, beta8,beta9, beta10), para = c(rep("Int1",length(beta1)),rep("Effect_ChalutS",length(beta2)),                        rep("SeffS_onTur",length(beta3)),rep("Int2",length(beta4)),
+  rep("SeffS_onTra",length(beta5)), rep("Int3",length(beta6)),
+  rep("Effect_TrawG",length(beta7)), rep("SeffG_onTur",length(beta8)),
+  rep("Int4",length(beta9)), rep("SeffG_onTra",length(beta10))))
+ggplot(data=beta) + geom_violin(aes(x = para, y = values, fill = para))
 ```
 
 First, get the whole grid.
 
-```{r echo=TRUE}
+```{r message=FALSE, warning=FALSE, include=FALSE}
 grid_coord <- grid %>%
   st_centroid() %>%
   st_coordinates() %>%
@@ -765,27 +851,45 @@ grid_coord <- grid %>%
   mutate(easting = (X - meanXG)/sdXG,
          northing = (Y - meanYG)/sdYG)
 
+grid_bathy <- sea %>% 
+  st_crop(grid) %>% 
+  st_transform(crs = st_crs(pays)) %>%
+  st_crop(xmin = 700000, xmax = 900000, ymin = 6140000, ymax = 6300000) %>%
+  mutate(cov_bathy = bathy.sc[,1]) %>%
+  pull(cov_bathy )
 ```
 
 Second, get linear predictor.
 
-```{r echo=TRUE}
-sm <- smoothCon(s(coordx, coordy, bs = "gp"), 
-                          data = data.frame(coordx = grid_coord$easting, 
+```{r include=FALSE}
+sm_bathy <- smoothCon(s(bathy), 
+                          data = data.frame(bathy = grid_bathy,
+                                            coordx = grid_coord$easting, 
                                             coordy = grid_coord$northing), 
                           absorb.cons = TRUE) 
 
-Xp <- PredictMat(sm[[1]], data.frame(coordx = grid_coord$easting, 
+sm_xy <- smoothCon(s(coordx, coordy, bs = "gp"), 
+                          data = data.frame(bathy = grid_bathy,
+                                            coordx = grid_coord$easting, 
+                                            coordy = grid_coord$northing), 
+                          absorb.cons = TRUE) 
+
+Xp_bathy <- PredictMat(sm_bathy[[1]], data.frame(bathy = grid_bathy,
+                                     coordx = grid_coord$easting, 
                                      coordy = grid_coord$northing))
-Xp <- cbind(1, Xp)
+Xp_xy <- PredictMat(sm_xy[[1]], data.frame(bathy = grid_bathy,
+                                     coordx = grid_coord$easting, 
+                                     coordy = grid_coord$northing))
+Xp <- cbind(1, Xp_bathy, Xp_xy)
 
 # bind the 2 chains
 samplesExt <- as_tibble(rbind(samples2$chain1, samples2$chain2, samples2$chain3))
 
+names(samplesExt)
 # matrix nit x 33 
-b1 <- as.matrix(samplesExt[,1:33])
-b2 <- as.matrix(samplesExt[,34:66])
-b3 <- as.matrix(samplesExt[,67:99])
+b1 <- as.matrix(samplesExt[,1:42])
+b2 <- as.matrix(samplesExt[,43:84])
+b3 <- as.matrix(samplesExt[,85:126])
 
 #dim(Xp)
 #dim(b1)
@@ -798,20 +902,20 @@ for (i in 1:nrow(b1)){
   mu2[1:nrow(Xp), i] <- Xp %*% b2[i,]
   mu3[1:nrow(Xp), i] <- Xp %*% b3[i,]
 }
-```
 
-Third, get occupancy probabilities.
-
-```{r echo=TRUE}
-prop1 <- apply(exp(mu1), 1, mean)
-prop2 <- apply(exp(mu2), 1, mean)
-prop3 <- apply(exp(mu3), 1, mean)
+prop1 <- apply(exp(mu1), 1, median)
+prop2 <- apply(exp(mu2), 1, median)
+prop3 <- apply(exp(mu3), 1, median)
 
 psi1 <- plogis(prop1) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
 psi2 <- plogis(prop2) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
 psi3 <- plogis(prop3) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
 psi0 <- 1 - (psi1 + psi2 + psi3)
+```
 
+Third, get occupancy probabilities.
+
+```{r echo=FALSE}
 # Marginal probabilities.
 #psi1 + psi3 # Pr(dolphin present)
 #psi2 + psi3 # Pr(fishing present)
@@ -834,7 +938,7 @@ cooc <- unique(c(which(y[,1] %in% c(4,8,12,16)), which(y[,2] %in% c(4,8,12,16)),
                  which(y[,4] %in% c(4,8,12,16)) ))
   
  ggplot() + 
-  geom_sf(data = grid, lwd = 0.1, aes(fill = psi3)) +
+  geom_sf(data = grid, lwd = 0.1, aes(fill = (psi3))) +
   geom_sf(data = pays) + 
   scale_fill_viridis_c(name = "") +
  labs(title = "Probabilité de co-occurrence dauphins et chalutiers", 
@@ -844,7 +948,7 @@ cooc <- unique(c(which(y[,1] %in% c(4,8,12,16)), which(y[,2] %in% c(4,8,12,16)),
 
 ## Maps of dolphin and trawlers space-use probabilities
 
-```{r echo=TRUE}
+```{r echo=FALSE}
 dof <- unique(c(which(y[,1] %in% c(2,4,5,6,7,8,10,12,13,14,15,16)), which(y[,2] %in% c(2,4,5,6,7,8,10,12,13,14,15,16)), which(y[,3] %in% c(2,4,5,6,7,8,10,12,13,14,15,16)),
                  which(y[,4] %in% c(2,4,5,6,7,8,10,12,13,14,15,16)) ))
 
@@ -855,7 +959,7 @@ traw <- unique(c(which(y[,1] %in% c(3,4,7,8,9,10,11,12,13,14,15,16)), which(y[,2
 map_dofin <- ggplot() + 
   geom_sf(data = grid, lwd = 0.1, aes(fill = c(psi3 + psi1))) +
   geom_sf(data = pays) + 
-  scale_fill_viridis_c(name = "") +
+  scale_fill_viridis_c(name = "", limits = c(0,1)) +
   labs(title = "Bottlenose dolphins space-use prob.", subtitle = "psi3 + psi1", 
        caption = "Source : SAMM & GDEGeM data")
 
@@ -890,11 +994,11 @@ map_trawlerSeul <- ggplot() +
 map_trawl <- ggplot() + 
   geom_sf(data = grid, lwd = 0.1, aes(fill = c(psi3 + psi2))) +
   geom_sf(data = pays) + 
-  scale_fill_viridis_c(name = "") +
+  scale_fill_viridis_c(name = "", limits = c(0,1)) +
   labs(title = "Trawlers space-use prob.",  subtitle = "psi3 + psi2", 
        caption = "Source : SAMM & GDEGeM data")
 
-cowplot::plot_grid(map_dofin, map_trawl, nrow = 1, ncol =2)
+(map_dofin/ map_trawl)
 ```
 ```{r echo=FALSE}
 cowplot::plot_grid(map_dofinCpres,map_dofinCabs, map_dofinSeul,map_trawlerSeul, nrow = 2, ncol = 2)
@@ -904,15 +1008,107 @@ Maps of detections
 
 ```{r echo=FALSE}
 map_detect <- ggplot()+
-  geom_sf(data = grid %>% slice(traw), fill = "#9a031e") +
-  geom_sf(data = grid %>% slice(dof), fill = "#0F4C5C") +
-  geom_sf(data = grid %>% slice(cooc), fill = "#fb8b24") + 
-  geom_sf(data = pays)
+  geom_sf(data = grid %>% slice(traw), aes(fill = "chalutier")) +
+  geom_sf(data = grid %>% slice(dof), aes(fill = "dauphin")) +
+  geom_sf(data = grid %>% slice(cooc), aes(fill = "both")) + 
+  geom_sf(data = pays) + 
+  scale_fill_manual(values = c("dauphin" = "#fb8b24", "both" = "#0f4c5c" , "chalutier" = "#9a031e")) +
+  labs(title= "Maps of detections")
 map_detect
 ```
 
 ## The probability of detecting dolphins conditionnal on trawlers occurence
 
-```{r echo = FALSE}
-cowplot::plot_grid(probG, probS, ncol = 1,  nrow = 2)
+### For SAMM  
+
+```{r echo=FALSE}
+grid_p <- seq(range(seffS)[1], range(seffS)[2], length = 100) 
+#grid_pfis <- seq(range(psi2+psi3)[1], range(psi2+psi3)[2], length = 100) 
+effSBrut <- seq(range(effortS)[1],range(effortS)[2]/1000, length = 100)
+
+nit <- length(beta1)
+
+logit_p12 <- logit_p12bar <-logit_p2 <- matrix(NA, nrow = length(beta1), ncol = length(grid_p))
+
+for(i in 1:length(grid_p)){
+logit_p12[1:nit,i] <- plogis(beta1[1:nit]  + beta3[1:nit] * grid_p[i] + beta2[1:nit])
+logit_p12bar[1:nit,i] <- plogis(beta1[1:nit]  + beta3[1:nit] * grid_p[i])
+logit_p2[1:nit,i] <- plogis(beta4[1:nit]  + beta5[1:nit] * grid_p[i])
+}
+
+logitp12 <- apply(logit_p12, 2, median)
+logitp12bar <- apply(logit_p12bar, 2, median)
+logitp2 <- apply(logit_p2, 2, median)
+
+
+logitp12min <- logitp12max <- logitp12barmin <- logitp12barmax <- logitp2min <- logitp2max <- rep(NA, ncol(logit_p12))
+
+for(i in 1:ncol(logit_p12)){
+  logitp12min[i] <- quantile(logit_p12[,i], 0.1)
+  logitp12max[i] <- quantile(logit_p12[,i], 0.9)
+  
+  logitp12barmin[i] <- quantile(logit_p12bar[,i], 0.1)
+  logitp12barmax[i] <- quantile(logit_p12bar[,i], 0.9)
+  
+  logitp2min[i] <- quantile(logit_p2[,i], 0.1)
+  logitp2max[i] <- quantile(logit_p2[,i], 0.9)
+}
+  
+psamm <- ggplot()+ 
+  geom_ribbon(aes(x = effSBrut, ymin = logitp2min, ymax = logitp2max), fill = "#9a031e", alpha = 0.4) +
+  geom_ribbon(aes(x = effSBrut, ymin = logitp12barmin, ymax = logitp12barmax), fill = "#0F4C5C", alpha =0.7) + 
+  geom_ribbon(aes(x = effSBrut, ymin = logitp12min, ymax = logitp12max), fill = "#fb8b24", alpha = 0.3)+ 
+  geom_line(aes(x = effSBrut, y = logitp12, color = "dauphin cond présence chalutier"),  lwd = 1) +
+  geom_line(aes(x = effSBrut, y = logitp12bar, color = "dauphin cond absence chalutier"), lwd = 1) + 
+  geom_line(aes(x = effSBrut, y = logitp2, color = "chalutier"), lwd = 1) +
+  scale_color_manual(values = c("dauphin cond présence chalutier" = "#fb8b24", "dauphin cond absence chalutier" = "#0F4C5C" , "chalutier" = "#9a031e")) + 
+  xlab("effort (km parcouru)") + ylab("probabilité estimée") + labs(title = "SAMM : probabilité de détection pour un...", color = "Legend")
+```
+
+### For GDEGeM  
+
+```{r echo=FALSE}
+grid_pg <- seq(range(seffG)[1], range(seffG)[2], length = 100) 
+#grid_pfis <- seq(range(psi2+psi3)[1], range(psi2+psi3)[2], length = 100) 
+effGBrut <- seq(range(effortG)[1],range(effortG)[2]/1000, length = 100)
+
+nit <- length(beta1)
+
+logit_p12g <- logit_p12barg <-logit_p2g <- matrix(NA, nrow = length(beta1), ncol = length(grid_pg))
+
+for(i in 1:length(grid_pg)){
+logit_p12g[1:nit,i] <- plogis(beta6[1:nit]  + beta8[1:nit] * grid_p[i] + beta7[1:nit])
+logit_p12barg[1:nit,i] <- plogis(beta6[1:nit]  + beta8[1:nit] * grid_p[i])
+logit_p2g[1:nit,i] <- plogis(beta9[1:nit]  + beta10[1:nit] * grid_p[i])
+}
+
+logitp12g <- apply(logit_p12g, 2, median)
+logitp12barg <- apply(logit_p12barg, 2, median)
+logitp2g <- apply(logit_p2g, 2, median)
+
+
+logitp12ming <- logitp12maxg <- logitp12barming <- logitp12barmaxg <- logitp2ming <- logitp2maxg <- rep(NA, ncol(logit_p12g))
+
+for(i in 1:ncol(logit_p12g)){
+  logitp12ming[i] <- quantile(logit_p12g[,i], 0.1)
+  logitp12maxg[i] <- quantile(logit_p12g[,i], 0.9)
+  
+  logitp12barming[i] <- quantile(logit_p12barg[,i], 0.1)
+  logitp12barmaxg[i] <- quantile(logit_p12barg[,i], 0.9)
+  
+  logitp2ming[i] <- quantile(logit_p2g[,i], 0.1)
+  logitp2maxg[i] <- quantile(logit_p2g[,i], 0.9)
+}
+  
+pgdegem <- ggplot()+ 
+  geom_ribbon(aes(x = effGBrut, ymin = logitp2ming, ymax = logitp2maxg), fill = "#9a031e", alpha = 0.4) +
+  geom_ribbon(aes(x = effGBrut, ymin = logitp12barming, ymax = logitp12barmaxg), fill = "#0F4C5C", alpha =0.7) +
+  geom_ribbon(aes(x = effGBrut, ymin = logitp12ming, ymax = logitp12maxg), fill = "#fb8b24", alpha = 0.3)+ 
+  geom_line(aes(x = effGBrut, y = logitp12g, color = "dauphin cond présence chalutier"),  lwd = 1) + 
+  geom_line(aes(x = effGBrut, y = logitp12barg, color = "dauphin cond absence chalutier"), lwd = 1) + 
+  geom_line(aes(x = effGBrut, y = logitp2g, color = "chalutier"), lwd = 1) +
+  scale_color_manual(values = c("dauphin cond présence chalutier" = "#fb8b24", "dauphin cond absence chalutier" = "#0F4C5C" , "chalutier" = "#9a031e")) + 
+  xlab("effort (km parcouru)") + ylab("probabilité estimée") + labs(title = "GDEGeM : probabilité de détection pour un...", color = "Legend")
+  
+psamm / pgdegem
 ```
