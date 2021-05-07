@@ -1,0 +1,455 @@
+---
+title: "Integrated multispecies occupancy model for bottlenose dolphins and fisheries in the Gulf of Lion, French Mediterranean Sea"
+author: "Valentin Lauret, Olivier Gimenez"
+date: "`r format(Sys.time(), '%d/%m/%Y')`"
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 2
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, results = 'hide', 
+                      dpi = 200, 
+                      cache = TRUE, fig.height = 3)
+library(tidyverse)
+theme_set(theme_light())
+library(sf)
+library(nimble)
+library(patchwork)
+```
+
+# An ounce of theory
+
+We consider a two-species static occupancy model à la [Rota et al. (2016)](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12587).
+
+Ignoring the site index, we use the following notation for the occupancy probabilities:
+
+-   $\psi_{11}$ is the prob. that species A and species B are both present;\
+-   $\psi_{10}$ is the prob. that species A is present and species B is absent;
+-   $\psi_{01}$ is the prob. that species A is absent and species B is present;
+-   $\psi_{00}$ is the prob. that species A and species B are both absent, with avec $\psi_{11} + \psi_{10} + \psi_{01} + \psi_{00} = 1.$
+
+The marginal probabilities of occupancy are:
+
+-   $\Pr(z_A = 1) = \Pr(\mbox{species A is present}) = \psi_{10} + \psi_{11}$
+-   $\Pr(z_B = 1) = \Pr(\mbox{species B is present}) = \psi_{01} + \psi_{11}$
+-   $\Pr(z_A = 0) = \Pr(\mbox{species A is absent}) = \psi_{01} + \psi_{00}$
+-   $\Pr(z_B = 0) = \Pr(\mbox{species B is absent}) = \psi_{10} + \psi_{00}$
+
+And the conditional probabilities (reminder: $\Pr(\mbox{A|B}) = \Pr(\mbox{A and B})/\Pr(\mbox{B})$):
+
+-   $\Pr(z_A = 1 | z_B = 0) = \psi_{10} / (\psi_{10} + \psi_{00}) = \Pr(\mbox{species A is present given species B is absent});$
+-   $\Pr(z_A = 1 | z_B = 1) = \psi_{11} / (\psi_{11} + \psi_{01}) = \Pr(\mbox{species A is present given species B is present});$
+-   $\Pr(z_B = 1 | z_A = 0) = \psi_{01} / (\psi_{01} + \psi_{00}) = \Pr(\mbox{species B is present given species A is absent});$
+-   $\Pr(z_B = 1 | z_A = 1) = \psi_{11} / (\psi_{11} + \psi_{10}) = \Pr(\mbox{species B is present given species A is present}).$
+
+In this document, we adapted the multi-species occupancy to integrate two datasets. We considered dataset `S` (e.g SAMM aerial line transects), and dataset `G` (e.g. GDEGeM boat search-encounter program). Both monitoring collected detection / non-detection about species A and B. Then, each species has a different detection probability depending on the monitoring program considered. For example, $p_{A}^{G}$ is the probability of detecting species A by monitoring program 'g'. Then, 16 observation 'event' can occur. We coded them:
+
+-   `1` for none species detected neither by G nor S
+-   `2` for species A detected by G, nothing by S
+-   `3` for species B detected by G, nothing by S
+-   `4` for both species detected by G, nothing by S
+-   `5` for none species detected neither by G, species A detected by S
+-   `6` for species A detected by G, species A detected by S
+-   `7` for species B detected by G, species A detected by S
+-   `8` for both species detected by G, species A detected by S
+-   `9` for none species detected neither by G, species B detected by S
+-   `10` for species A detected by G, species B detected by S
+-   `11` for species B detected by G, species B detected by S
+-   `12` for both species detected by G, species B detected by S
+-   `13` for none species detected neither by G, both species detected by S
+-   `14` for species A detected by G, both species detected by S
+-   `15` for species B detected by G, both species detected by S
+-   `16` for both species detected by G, both species detected by S
+
+From the 4 ecological states and the 16 observation events, we obtaine the observation process with the following 4x16 matrix.
+
+$$  t(\theta ) = \begin{bmatrix} 1 & (1 - p_{A}^{G})(1 - p_{A}^{S}) & (1 - p_{B}^{G})(1 - p_{B}^{S}) & (1 - p_{B}^{G})(1 - p_{B}^{S})(1 - p_{A}^{S})(1 - p_{A}^{G}) \\
+0&  p_{A}^{G}(1- p_{A}^{S})  &0 &(1 - p_{B}^{S})(1 - p_{A}^{S})p_{A}^{G}(1-p_{B}^{G}) \\
+0& 0 & p_{B}^{G}(1- p_{B}^{S})  &(1 - p_{B}^{S})(1 - p_{A}^{S})p_{B}^{G}(1-p_{A}^{G}) \\
+ 0&  0 &0 &(1 - p_{B}^{S})(1 - p_{A}^{S})p_{A}^{G}p_{B}^{G} \\
+ 0& p_{A}^{S}(1-p_{A}^{G})  &0   &p_{A}^{S}(1-p_{B}^{S})(1-p_{A}^{G})(1-p_{B}^{G}) \\
+0& p_{A}^{G}p_{A}^{S} &0  &p_{A}^{S}(1-p_{B}^{S})p_{A}^{G}(1-p_{B}^{G}) \\
+ 0& 0  &0  &p_{A}^{S}(1-p_{B}^{S})p_{B}^{G}(1-p_{A}^{G}) \\
+ 0&  0  &0  &p_{A}^{S}(1-p_{B}^{S})p_{A}^{G}p_{B}^{G}\\
+0& 0 &0  &p_{B}^{S}(1-p_{A}^{S})(1-p_{A}^{G})(1-p_{B}^{G}) \\
+0& 0  &p_{B}^{G}p_{B}^{S}  &p_{B}^{S}(1-p_{A}^{S})p_{A}^{G}(1-p_{B}^{G}) \\
+0& 0& 0  &p_{B}^{S}(1-p_{A}^{S})p_{B}^{G}(1-p_{A}^{G}) \\
+0& 0& 0   &p_{B}^{S}(1-p_{A}^{S})p_{B}^{G}p_{A}^{G} \\
+0& 0& 0   &p_{A}^{S}p_{B}^{S}(1-p_{B}^{G})(1-p_{A}^{G}) \\
+0& 0& 0    &p_{A}^{S}p_{B}^{S}p_{A}^{G}(1-p_{B}^{G})\\
+0& 0& 0  &p_{A}^{S}p_{B}^{S}p_{B}^{G}(1-p_{A}^{G}) \\
+0& 0& 0  &p_{B}^{G}p_{B}^{S}p_{A}^{G}p_{A}^{S}\\
+\end{bmatrix}$$
+
+
+# The data
+
+We used GDEGeM data collected by [EcoOcean Institut](https://ecoocean-institut.org/) in the Gulf of Lion between 2013 and 2015. We extracted detections of common Bottlenose Dolphins _(Turisops truncatus)_), and of trawlers. In parallel, we used Bottlenose dolphins and trawlers detections from the SAMM project of 2011-2012.
+
+```{r message=FALSE, warning=FALSE, echo = FALSE}
+load("IMSOres2.rdata")
+
+grid <- st_read("Grid/grid.shp") %>% st_transform(crs = st_crs(pays))
+# focus Golfe du Lion
+grid <-  grid %>% st_crop(xmin = 700000, xmax = 900000, ymin = 6140000, ymax = 6300000) 
+pays <- pays %>% st_crop(st_bbox(grid))
+
+sea <- st_transform(sea, crs = st_crs(grid))
+mt <- st_crop(sea,grid)
+```
+
+Below, you can see the study area, the detections, and the sampling effort of the two datasets.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cooc <- unique(c(which(y[,1] %in% c(4,8,12,16)), which(y[,2] %in% c(4,8,12,16)), which(y[,3] %in% c(4,8,12,16)), which(y[,4] %in% c(4,8,12,16)) ))
+dof <- unique(c(which(y[,1] %in% c(2,4,5,6,7,8,10,12,13,14,15,16)), which(y[,2] %in% c(2,4,5,6,7,8,10,12,13,14,15,16)), which(y[,3] %in% c(2,4,5,6,7,8,10,12,13,14,15,16)),
+                 which(y[,4] %in% c(2,4,5,6,7,8,10,12,13,14,15,16)) ))
+traw <- unique(c(which(y[,1] %in% c(3,4,7,8,9,10,11,12,13,14,15,16)), which(y[,2] %in% c(3,4,7,8,9,10,11,12,13,14,15,16)), which(y[,3] %in% c(3,4,7,8,9,10,11,12,13,14,15,16)),
+                 which(y[,4] %in% c(3,4,7,8,9,10,11,12,13,14,15,16)) ))
+
+# trS <-  st_transform(tr, crs = st_crs(grid)) %>% st_crop(grid)
+# trG <-  st_read("data_gdegem/Transect en effort GDEGeM RGF93.shp")
+
+
+map_detect <- ggplot()+
+  geom_sf(data = grid %>% slice(traw), aes(fill = "Trawlers")) +
+  geom_sf(data = grid %>% slice(dof), aes(fill = "Dolphins")) +
+  geom_sf(data = grid %>% slice(cooc), aes(fill = "Both")) +
+  geom_sf(data = trS, color = "chartreuse3", alpha = 0.4) +
+  geom_sf(data = trG, color = "chartreuse2", alpha = 0.4)+
+  geom_sf(data = pays) + 
+  scale_fill_manual(values = c("Dolphins" = "#fb8b24", "Both" = "#0f4c5c" , "Trawlers" = "#9a031e")) +
+  labs(title= "Maps of detections", caption = "Source: from SAMM and GDEGeM data collected in the Gulf of Lion", fill = "Species detected")
+map_detect
+```
+To describe spatial variation of the use of space by bottlenose dolphins and trawlers, we used two environmental covariates:  
+
+  * Bathymetry
+  * Sea Surface Temperature (SST) averaged monthly between 2011 and 2015
+  
+Below, you can see the value of each covariate spatialized.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# plot covariables
+bat <- ggplot() + 
+  geom_sf(data = mt, aes(fill = bathy)) +
+  geom_sf(data = pays) + 
+  theme(plot.margin = unit(c(0,0,0,0), "cm")) + 
+  labs(fill = "Bathymetry (m)")
+
+sst <- ggplot() + 
+  geom_sf(data = mt, aes(fill = sst)) +
+  geom_sf(data = pays) + 
+  theme(plot.margin = unit(c(0,0,0,0), "cm")) + 
+  labs(fill = "SST (°C)")
+
+(sst + bat)
+```
+
+We estimated 4 occupancy probabilities for each cell of the study area :  
+
+  * the prob. that onyl bottlenose dolphins use the cell, `psi1`
+  * the prob. that only trawlers use the cell, `psi2`
+  * the prob. that both dolphins and trawlers use the cell, `psi3`
+  * the prob. that neither dolphins nor trawlers use the cell, which correspond to the probability that none of the previous events occur, `psi0`.
+  
+  The 3 probabilities `psi1`, `psi2`, and `psi3` are calculated as logistic regression of environmental covariates (Bathymetry and SST) as in the equation below:  
+  
+  $$ logit( \psi ) = \theta_0 + \theta_1 Bathymetry + \theta_2 SST$$
+# Analyze 
+
+We do not present the code in this document but you can [find it on Github](https://github.com/oliviergimenez/human-tursiops-twospeciesoccupancy).
+
+# Results
+
+  
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(coda)
+library(mcmcplots)
+
+load("IMSObatsstchla_50kit.rdata")
+
+# save parameters to plot 
+
+theta1 <- c(samples2$chain1[, 'theta[1]'] , samples2$chain2[, 'theta[1]'],samples2$chain3[, 'theta[1]'])
+theta2 <- c(samples2$chain1[, 'theta[2]'] , samples2$chain2[, 'theta[2]'],samples2$chain3[, 'theta[2]'])
+theta3 <- c(samples2$chain1[, 'theta[3]'] , samples2$chain2[, 'theta[3]'],samples2$chain3[, 'theta[3]'])
+theta4 <- c(samples2$chain1[, 'theta[4]'] , samples2$chain2[, 'theta[4]'],samples2$chain3[, 'theta[4]'])
+theta5 <- c(samples2$chain1[, 'theta[5]'] , samples2$chain2[, 'theta[5]'],samples2$chain3[, 'theta[5]'])
+theta6 <- c(samples2$chain1[, 'theta[6]'] , samples2$chain2[, 'theta[6]'],samples2$chain3[, 'theta[6]'])
+theta7 <- c(samples2$chain1[, 'theta[7]'] , samples2$chain2[, 'theta[7]'],samples2$chain3[, 'theta[7]'])
+theta8 <- c(samples2$chain1[, 'theta[8]'] , samples2$chain2[, 'theta[8]'],samples2$chain3[, 'theta[8]'])
+theta9 <- c(samples2$chain1[, 'theta[9]'] , samples2$chain2[, 'theta[9]'],samples2$chain3[, 'theta[9]'])
+# theta10 <- c(samples2$chain1[, 'theta[10]'] , samples2$chain2[,'theta[10]'],samples2$chain3[,'theta[10]'])
+# theta11 <- c(samples2$chain1[, 'theta[11]'] , samples2$chain2[,'theta[11]'],samples2$chain3[,'theta[11]'])
+# theta12 <- c(samples2$chain1[, 'theta[12]'] , samples2$chain2[,'theta[12]'],samples2$chain3[,'theta[12]'])
+
+theta <- bind_cols(values =c(theta1, theta2,theta3,theta4,
+                             theta5, theta6, theta7,
+                             theta8,theta9), 
+                   para = c(rep("Intercept",length(theta1)),
+                            rep("Bathyemtry slope",length(theta2)),  
+                            rep("SST slope",length(theta3)),
+                            rep("Intercept",length(theta4)),
+                            rep("Bathyemtry slope",length(theta5)),
+                            rep("SST slope",length(theta6)),
+                            rep("Intercept",length(theta7)),
+                            rep("Bathyemtry slope",length(theta8)),
+                            rep("SST slope",length(theta9))),
+                   type = c(rep("Dolphins only", length(theta1)*3),
+                            rep("Trawlers only", length(theta1)*3),
+                            rep("Coocurrence", length(theta1)*3)))
+
+```
+
+Then, we plotted the relation between bathymetry and occupancy probability.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# bind the 2 chains
+samplesExt <- as_tibble(rbind(samples2$chain1, samples2$chain2, samples2$chain3))
+
+
+ech <- sample(1:length(theta1), 5000, replace = FALSE)
+#dim(Xp)
+#dim(b1)
+
+mu1 <- matrix(NA, nrow = length(ech), ncol = length(mt$bathy.sc[,1]))
+mu2 <- matrix(NA, nrow = length(ech), ncol = length(mt$bathy.sc[,1]))
+mu3 <- matrix(NA, nrow = length(ech), ncol = length(mt$bathy.sc[,1]))
+
+for( i in 1:nrow(mu1)){
+  mu1[i,1:ncol(mu1)] <- theta1[i] + theta2[i]* mt$bathy.sc[,1] + theta3[i]* mt$sst.sc[,1]# + theta4[i]* mt$chl.sc[,1] 
+  mu2[i,1:ncol(mu1)] <- theta4[i] + theta5[i]* mt$bathy.sc[,1] + theta6[i]* mt$sst.sc[,1] #+ theta8[i]* mt$chl.sc[,1] 
+  mu3[i,1:ncol(mu1)] <- theta7[i] + theta8[i]* mt$bathy.sc[,1] + theta9[i]* mt$sst.sc[,1]
+ #+ theta12[i]* mt$chl.sc[,1] 
+  
+}
+
+prop1 <- apply(exp(mu1), 2, mean)
+prop2 <- apply(exp(mu2), 2, mean)
+prop3 <- apply(exp(mu3), 2, mean)
+prop3sd <- apply(exp(mu3), 2, sd)
+prop2sd <- apply(exp(mu2), 2, sd)
+prop1sd <- apply(exp(mu1), 2, sd)
+
+psi1 <- plogis(prop1) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+psi2 <- plogis(prop2) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+psi3 <- plogis(prop3) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+psi0 <- 1 - (psi1 + psi2 + psi3)
+
+
+# quantile 80%
+prop3q <- apply(exp(mu3),2, quantile, probs=c(0.1,0.9))
+prop2q <- apply(exp(mu2),2, quantile, probs=c(0.1,0.9))
+prop1q <- apply(exp(mu1),2, quantile, probs=c(0.1,0.9))
+
+psi3inf <- plogis(prop3q[1,]) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+psi3sup <- plogis(prop3q[2,]) / (1 + plogis(prop1) + plogis(prop2) + plogis(prop3))
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# plot gam relationship
+gamr <- tibble(bathy = mt$bathy, psi1 = psi1, psi2 = psi2, psi3 = psi3, psi0= psi0, sst = mt$sst ) %>% 
+  arrange( bathy)
+
+ggplot(data= gamr) + 
+  geom_smooth( aes(x = bathy, y = psi1, color = "Dolphins only" ), method = "gam") +
+  geom_smooth( aes(x = bathy, y = psi2, color = "Trawlers only"  ), method = "gam")+
+  geom_smooth( aes(x = bathy, y = psi3, color = "Coocurrence"), method = "gam")+
+  geom_smooth( aes(x = bathy, y = psi0, color = "Nothing"), method = "gam") + 
+  scale_color_viridis_d() + labs(color = "Species") +
+  xlab("Bathymetry") + ylab("Occupancy probability")
+```
+
+We saw that on low depth seafloors, it is likely to have both dolphins and trawlers using the space. While, on high depth seafloors none species are likely to occur. Dolphins and trawlars dislayed an important overlap in their space use according to these simple results. 
+
+To have an overview of the coocurrence, we plot `psi3` the prob. of having both species using the cell. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+map_psi3 <-  ggplot() + 
+  geom_sf(data = grid, lwd = 0.1, aes(fill = (psi3))) +
+  geom_sf(data = pays) + 
+  scale_fill_viridis_c(name = "", limits = c(min(psi3inf), max(psi3sup))) +
+ labs(title = "Coocurrence probability between trawlers and bottlenose dolphins", 
+       subtitle = "estimated with a multispecies occupancy model",
+       caption = "Source : SAMM & GDEGeM data") 
+
+
+# map sd 
+map_psi3inf <-  ggplot() + 
+  geom_sf(data = grid, lwd = 0.1, aes(fill = (psi3inf))) +
+  geom_sf(data = pays) + 
+  scale_fill_viridis_c(name = "", limits = c(min(psi3inf), max(psi3sup))) +
+ labs(title = "Lower CI") + 
+  theme(legend.position = "none")
+
+map_psi3sup <-  ggplot() + 
+  geom_sf(data = grid, lwd = 0.1, aes(fill = (psi3sup))) +
+  geom_sf(data = pays) + 
+  scale_fill_viridis_c(name = "", limits = c(min(psi3inf), max(psi3sup))) +
+ labs(title = "Upper CI", 
+       caption = "80% credible interval") + 
+  theme(legend.position = "none")
+
+( map_psi3 ) + (map_psi3inf / map_psi3sup)
+```
+
+As illustrated in the previous figure, coocurrence probability is mainly driven by bathymetry.
+
+
+# Annexe 
+
+First, we display the occupancy estimates of the $\theta$'s for the different probabilities `psi&`, `psi2`, and `psi3`.
+
+```{r}
+ggplot(data=theta) + 
+  geom_hline( yintercept  = 0) +
+  geom_boxplot(aes(x = para, y = values, fill = type)) + 
+  facet_wrap(~para, scale = "free") + 
+  scale_fill_viridis_d(option = "D")+
+  labs(fill = "") + xlab("") + ylab("")
+```
+
+Table of estimates
+
+| Parameter                    | Dolphins only $\psi_1$ | Trawlers only $\psi_2$ | Coocurrence $\psi_3$ |
+|------------------------------|------------------------|------------------------|----------------------|
+| Intercept $\theta_0$         |                        |                        |                      |
+| Bathymetry effect $\theta_1$ |                        |                        |                      |
+|  SST effect $\theta_2$       |                        |                        |                      |
+
+
+Second, if we look at the probability of dolphin space-use (or trawlers), we have to sum `psi1 + psi3` (or `psi2 + psi3`). Below are the maps.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+map_dofin <- ggplot() + 
+  geom_sf(data = grid, lwd = 0.1, aes(fill = c(psi3 + psi1))) +
+  geom_sf(data = pays) + 
+  scale_fill_viridis_c(name = "", limits = c(min(psi1+psi3, psi2+psi3),max(psi1+psi3, psi2+psi3))) +
+  labs(title = "Bottlenose dolphins space-use prob.", subtitle = "psi3 + psi1", 
+       caption = "Source : SAMM & GDEGeM data")
+
+map_trawl <- ggplot() + 
+  geom_sf(data = grid, lwd = 0.1, aes(fill = c(psi3 + psi2))) +
+  geom_sf(data = pays) + 
+  scale_fill_viridis_c(name = "",limits = c(min(psi1+psi3, psi2+psi3),max(psi1+psi3, psi2+psi3))) +
+  labs(title = "Trawlers space-use prob.",  subtitle = "psi3 + psi2", 
+       caption = "Source : SAMM & GDEGeM data") + theme(legend.position = "none")
+
+(map_dofin + map_trawl)
+```
+
+These maps also reflect the influence of bathymetry affecting dolphins and trawlers space-use.
+
+## The probability of detecting dolphins conditionnal on trawlers occurence
+
+Because it is a field work evidence, we looked at whether the model finds more likely to detect dolphins at the grid-cells used by trawlers.
+
+To assess the effect of trawlers presence on dolphin detection probability, we added a binary covariate indicating whether or not the trawlers used the grid-cell. For cell $i$, and sampling occasion $j$, we have:
+
+$$ logit(p_{ij}) = \beta_0 + \beta_1 SamplingEffort_{ij} + \beta_2 TrawlersPres_{i} $$
+with $$TrawlersPres_i = 1 \; \;  if \; \;  z_i = 2 \; | \; z_i = 3$$
+$$TrawlersPres_i = 0 \; \; if \; \; z_i = 1 \; | \; z_i = 0 $$
+
+We obtained no significant result of the trawlers presence. Trawlers and dolphins use of space display important overlap according to our simple model. There are many locations where trawlers are estimated to be present and where no detection of dolphins had been made. Then, there is no effect of trawlers presence of dolphins detection in our estimations.  
+
+To have a closer look at this question, one might investigate the temporality of detections, or the complete the Multispecies occupancy model by other data.
+
+```{r echo=FALSE}
+beta1 <- c(samples2$chain1[, 'beta[1]'] , samples2$chain2[, 'beta[1]'],samples2$chain3[, 'beta[1]'])
+beta2 <- c(samples2$chain1[, 'beta[2]'] , samples2$chain2[, 'beta[2]'],samples2$chain3[, 'beta[2]'])
+beta3 <- c(samples2$chain1[, 'beta[3]'] , samples2$chain2[, 'beta[3]'],samples2$chain3[, 'beta[3]'])
+beta4 <- c(samples2$chain1[, 'beta[4]'] , samples2$chain2[, 'beta[4]'],samples2$chain3[, 'beta[4]'])
+beta5 <- c(samples2$chain1[, 'beta[5]'] , samples2$chain2[, 'beta[5]'],samples2$chain3[, 'beta[5]'])
+beta6 <- c(samples2$chain1[, 'beta[6]'] , samples2$chain2[, 'beta[6]'],samples2$chain3[, 'beta[6]'])
+beta7 <- c(samples2$chain1[, 'beta[7]'] , samples2$chain2[, 'beta[7]'],samples2$chain3[, 'beta[7]'])
+beta8 <- c(samples2$chain1[, 'beta[8]'] , samples2$chain2[, 'beta[8]'],samples2$chain3[, 'beta[8]'])
+
+beta <- bind_cols(values = c(beta1, beta2,beta3,beta4,beta5,
+                             beta6, beta7, beta8), para = c(rep("Int1",length(beta1)),                       rep("SeffS_onTur",length(beta2)),rep("Int2",length(beta3)),
+  rep("SeffS_onTra",length(beta4)), rep("Int3",length(beta5)),
+ rep("SeffG_onTur",length(beta6)),
+  rep("Int4",length(beta7)), rep("SeffG_onTra",length(beta8))))
+
+grid_p <- seq(range(seffS)[1], range(seffS)[2], length = 100) 
+#grid_pfis <- seq(range(psi2+psi3)[1], range(psi2+psi3)[2], length = 100) 
+effSBrut <- seq(range(effortS)[1],range(effortS)[2]/1000, length = 100)
+
+nit <- length(beta1)
+
+logit_p12 <- logit_p12bar <-logit_p2 <- matrix(NA, nrow = length(beta1), ncol = length(grid_p))
+
+for(i in 1:length(grid_p)){
+logit_p12[1:nit,i] <- plogis(beta1[1:nit]  + beta2[1:nit] * grid_p[i] )
+logit_p2[1:nit,i] <- plogis(beta3[1:nit]  + beta4[1:nit] * grid_p[i])
+}
+
+logitp12 <- apply(logit_p12, 2, median)
+logitp12bar <- apply(logit_p12bar, 2, median)
+logitp2 <- apply(logit_p2, 2, median)
+
+
+logitp12min <- logitp12max <- logitp2min <- logitp2max <- rep(NA, ncol(logit_p12))
+
+for(i in 1:ncol(logit_p12)){
+  logitp12min[i] <- quantile(logit_p12[,i], 0.1)
+  logitp12max[i] <- quantile(logit_p12[,i], 0.9)
+  
+  logitp2min[i] <- quantile(logit_p2[,i], 0.1)
+  logitp2max[i] <- quantile(logit_p2[,i], 0.9)
+}
+
+grid_pg <- seq(range(seffG)[1], range(seffG)[2], length = 100) 
+#grid_pfis <- seq(range(psi2+psi3)[1], range(psi2+psi3)[2], length = 100) 
+effGBrut <- seq(range(effortG)[1],range(effortG)[2]/1000, length = 100)
+
+nit <- length(beta1)
+
+logit_p12g <- logit_p2g <- matrix(NA, nrow = length(beta1), ncol = length(grid_pg))
+
+for(i in 1:length(grid_pg)){
+logit_p12g[1:nit,i] <- plogis(beta5[1:nit]  + beta6[1:nit] * grid_p[i])
+logit_p2g[1:nit,i] <- plogis(beta7[1:nit]  + beta8[1:nit] * grid_p[i])
+}
+
+logitp12g <- apply(logit_p12g, 2, median)
+logitp2g <- apply(logit_p2g, 2, median)
+
+
+logitp12ming <- logitp12maxg <-  logitp2ming <- logitp2maxg <- rep(NA, ncol(logit_p12g))
+
+for(i in 1:ncol(logit_p12g)){
+  logitp12ming[i] <- quantile(logit_p12g[,i], 0.1)
+  logitp12maxg[i] <- quantile(logit_p12g[,i], 0.9)
+  
+  logitp2ming[i] <- quantile(logit_p2g[,i], 0.1)
+  logitp2maxg[i] <- quantile(logit_p2g[,i], 0.9)
+}
+```
+
+```{r}
+pgdegem <- ggplot()+ 
+  geom_ribbon(aes(x = effGBrut, ymin = logitp2ming, ymax = logitp2maxg), fill = "#9a031e", alpha = 0.4) +
+  geom_ribbon(aes(x = effGBrut, ymin = logitp12ming, ymax = logitp12maxg), fill = "#fb8b24", alpha = 0.3)+ 
+  geom_line(aes(x = effGBrut, y = logitp12g, color = "Dolphin"),  lwd = 1) + 
+  geom_line(aes(x = effGBrut, y = logitp2g, color = "Trawlers"), lwd = 1) +
+  scale_color_manual(values = c("Dolphin" = "#fb8b24", "Trawlers" = "#9a031e")) + 
+  xlab("Sampling effort (km)") + ylab("Detection probability") + labs(title = "GDEGeM : detection probabilities",subtitle = "as a function of sampling effort", color = "Legend") + 
+  theme(legend.position = "none")
+  
+psamm <- ggplot()+ 
+  geom_ribbon(aes(x = effSBrut, ymin = logitp2min, ymax = logitp2max), fill = "#9a031e", alpha = 0.4) +
+  geom_ribbon(aes(x = effSBrut, ymin = logitp12min, ymax = logitp12max), fill = "#fb8b24", alpha = 0.3)+ 
+  geom_line(aes(x = effSBrut, y = logitp12, color = "Dolphin"),  lwd = 1) +
+  geom_line(aes(x = effSBrut, y = logitp2, color = "Trawlers"), lwd = 1) +
+  scale_color_manual(values = c("Dolphin" = "#fb8b24", "Trawlers" = "#9a031e")) + 
+  xlab("Sampling effort (km)") + ylab("Detection probability") + labs(title = "SAMM : detection probability", subtitle=  "as function of sampling effort", color = "Legend")
+
+pgdegem + psamm 
+```
+
+
