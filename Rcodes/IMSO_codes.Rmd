@@ -156,44 +156,43 @@ IMSO <- nimbleCode({
   }  
   ## priors for...
   # occupancy probabilities
-  
+
   for(j in 1:nsite) {
-    log(prop[j, 1]) <- theta1[j] 
-    log(prop[j, 2]) <- theta2[j] 
+    log(prop[j, 1]) <- theta1[j]
+    log(prop[j, 2]) <- theta2[j]
     log(prop[j, 3]) <- theta3[j]
   }
-  
-  theta1[1:nsite] <- X[1:nsite,1:42] %*% b1[1:42] ## linear predictor
-  theta2[1:nsite] <- X[1:nsite,1:42] %*% b2[1:42] ## linear predictor
-  theta3[1:nsite] <- X[1:nsite,1:42] %*% b3[1:42] ## linear predictor
-  
-  b1[1] ~ dnorm(0,0.01) 
-  b2[1] ~ dnorm(0,0.01) 
-  b3[1] ~ dnorm(0,0.01) 
-  
-  ## prior for s(bathy) 
-  K11[1:9,1:9] <- S1[1:9,1:9] * lambda[1, 1]  + S1[1:9,10:18] * lambda[2, 1]
-  K12[1:9,1:9] <- S1[1:9,1:9] * lambda[1, 2]  + S1[1:9,10:18] * lambda[2, 2]
-  K13[1:9,1:9] <- S1[1:9,1:9] * lambda[1, 3]  + S1[1:9,10:18] * lambda[2, 3]
-  b1[2:10] ~ dmnorm(zero[2:10], K11[1:9,1:9]) 
-  b2[2:10] ~ dmnorm(zero[2:10], K12[1:9,1:9]) 
-  b3[2:10] ~ dmnorm(zero[2:10], K13[1:9,1:9]) 
-  
-  ## prior for s(coordx,coordy) 
-  K21[1:32,1:32] <- S2[1:32,1:32] * lambda[3, 1]  + S2[1:32,33:64] * lambda[4, 1]
-  K22[1:32,1:32] <- S2[1:32,1:32] * lambda[3, 2]  + S2[1:32,33:64] * lambda[4, 2]
-  K23[1:32,1:32] <- S2[1:32,1:32] * lambda[3, 3]  + S2[1:32,33:64] * lambda[4, 3]
-  b1[11:42] ~ dmnorm(zero[11:42], K21[1:32,1:32]) 
-  b2[11:42] ~ dmnorm(zero[11:42], K22[1:32,1:32]) 
-  b3[11:42] ~ dmnorm(zero[11:42], K23[1:32,1:32]) 
-  
+
+  theta1[1:nsite] <- X[1:nsite,1:34] %*% b1[1:34] ## linear predictor
+  theta2[1:nsite] <- X[1:nsite,1:34] %*% b2[1:34] ## linear predictor
+  theta3[1:nsite] <- X[1:nsite,1:34] %*% b3[1:34] ## linear predictor
+
+
+  b1[1] ~ dnorm(0,0.01)
+  b2[1] ~ dnorm(0,0.01)
+  b3[1] ~ dnorm(0,0.01)
+
+  ## prior for s(bathy)
+  b1[2] ~ dnorm(0,0.01)
+  b2[2] ~ dnorm(0,0.01)
+  b3[2] ~ dnorm(0,0.01)
+
+  ## prior for s(coordx,coordy)
+  K21[1:32,1:32] <- S1[1:32,1:32] * lambda[1, 1]  + S1[1:32,33:64] * lambda[2, 1]
+  K22[1:32,1:32] <- S1[1:32,1:32] * lambda[1, 2]  + S1[1:32,33:64] * lambda[2, 2]
+  K23[1:32,1:32] <- S1[1:32,1:32] * lambda[1, 3]  + S1[1:32,33:64] * lambda[2, 3]
+  b1[3:34] ~ dmnorm(zero[1:32], K21[1:32,1:32])
+  b2[3:34] ~ dmnorm(zero[1:32], K22[1:32,1:32])
+  b3[3:34] ~ dmnorm(zero[1:32], K23[1:32,1:32])
+
   ## smoothing parameter priors
-  for (i in 1:4) {
+  for (i in 1:2) {
     for (kk in 1:3){
       lambda[i, kk] ~ dgamma(.05,.005)
       rho[i, kk] <- log(lambda[i, kk])
     }
   }
+  
   # detection probabilities
   # VL: There are four detections probabilities now pAs, pAg, pBg, pBs
   for(j in 1:nsite) {
@@ -228,7 +227,6 @@ data <- list(y = y,
              effindG = effindG,
              X = res$jags.data$X, # gam para
              S1 = res$jags.data$S1,
-             S2 = res$jags.data$S2,
              zero = res$jags.data$zero)
 
 constants <- list(nsite = dim(y)[1], 
