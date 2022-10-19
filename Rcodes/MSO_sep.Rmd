@@ -1,0 +1,316 @@
+---
+title: Using integrated multispecies occupancy models to map co-occurrence between
+  bottlenose dolphins and fisheries in the Gulf of Lion, French Mediterranean Sea.
+author: "Valentin Lauret, Hélène Labach, Léa David, Matthieu Authier, Olivier Gimenez"
+subtitle: R codes
+output:
+  pdf_document: default
+  word_document: default
+  bookdown::pdf_document2:
+    extra_dependencies: float
+    highlight: tango
+geometry: margin=0.5cm
+toc: no
+---
+
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(eval = FALSE, 
+                      echo = TRUE,
+                      results = 'hide', 
+                      dpi = 300, 
+                      cache = TRUE)
+```
+
+# Load required packages
+
+```{r}
+library(tidyverse)
+library(sf)
+library(nimble)
+```
+
+# Load data
+
+```{r ,  message=FALSE, warning=FALSE}
+load("MSOdata.rdata")
+```
+
+# MSO
+
+First load the model 
+
+## BUGS model
+
+```{r eval = FALSE, include=TRUE }
+MSO <- nimbleCode({
+
+  ## state process
+  for(j in 1:nsite){
+    z[j] ~ dcat(psi[j, 1:4])
+  }
+  # occupancy probabilities
+
+  psi[1:nsite, 1] <- 1 / (1 + sum(prop[1:nsite, 1:3])) # unoccupied
+  psi[1:nsite, 2] <- prop[1:nsite, 1] / (1 + sum(prop[1:nsite, 1:3])) # occupied by species A and not B
+  psi[1:nsite, 3] <- prop[1:nsite, 2] / (1 + sum(prop[1:nsite, 1:3])) # occupied by species B and not A
+  psi[1:nsite, 4] <- prop[1:nsite, 3] / (1 + sum(prop[1:nsite, 1:3])) # occupied by both species A and B
+
+  ## observation process
+  for(j in 1:nsite) {
+    for(k in 1:nyear) {
+      y[j, k] ~ dcat(obs[j, k, 1:4, z[j]])
+    }
+  }
+
+  # detection matrix with obs for observations and state = true states
+  # obs take values:
+  ## Let's have a bit of explanation, we have species A, and B. We have monitoring through SAMM only
+  ## Then, we have 4 different situations
+  # 1 for none species detected
+  # 2 for species A
+  # 3 for species B
+  # 4 for both species detected
+
+  # given state = unoccupied,
+  for(j in 1:nsite) {
+    for(k in 1:nyear) {
+      # state 1 = no species use the site
+      obs[j, k, 1,  1] <- 1 # prob obs = 1
+      obs[j, k, 2,  1] <- 0 # prob obs = 2
+      obs[j, k, 3,  1] <- 0 # prob obs = 3
+      obs[j, k, 4,  1] <- 0 # prob obs = 4
+
+      # given state 2 = occupied by species A and not B,
+      obs[j, k, 1,  2] <- 1 - pA[j,k] # prob obs = 1
+      obs[j, k, 2,  2] <- pA[j,k] # prob obs = 2
+      obs[j, k, 3,  2] <- 0 # prob obs = 3
+      obs[j, k, 4,  2] <- 0 # prob obs = 4
+
+      # given state 3 = occupied by species B and not A,
+      obs[j, k, 1,  3] <- 1 - pB[j,k] # prob obs = 1
+      obs[j, k, 2,  3] <- 0 # prob obs = 2
+      obs[j, k, 3,  3] <- pB[j,k] # prob obs = 3
+      obs[j, k, 4,  3] <- 0 # prob obs = 4
+
+      # given state 4 = occupied by both species B and A,
+      obs[j, k, 1,  4] <- (1 - pA[j,k]) * (1 - pB[j,k]) # prob obs = 1
+      obs[j, k, 2,  4] <-  pA[j,k] * (1 - pB[j,k]) # prob obs = 2
+      obs[j, k, 3,  4] <-  pB[j,k] * (1 - pA[j,k]) # prob obs = 3
+      obs[j, k, 4,  4] <-  pA[j,k] * pB[j,k]   # prob obs = 4
+    }
+  }
+  ## priors for...
+  # occupancy probabilities
+
+  for(j in 1:nsite) {
+    log(prop[j, 1]) <- theta1[j]
+    log(prop[j, 2]) <- theta2[j]
+    log(prop[j, 3]) <- theta3[j]
+  }
+
+  theta1[1:nsite] <- X[1:nsite,1:34] %*% b1[1:34] ## linear predictor
+  theta2[1:nsite] <- X[1:nsite,1:34] %*% b2[1:34] ## linear predictor
+  theta3[1:nsite] <- X[1:nsite,1:34] %*% b3[1:34] ## linear predictor
+
+
+  b1[1] ~ dnorm(0,0.01)
+  b2[1] ~ dnorm(0,0.01)
+  b3[1] ~ dnorm(0,0.01)
+
+  ## prior for s(bathy)
+  b1[2] ~ dnorm(0,0.01)
+  b2[2] ~ dnorm(0,0.01)
+  b3[2] ~ dnorm(0,0.01)
+
+  ## prior for s(coordx,coordy)
+  K21[1:32,1:32] <- S1[1:32,1:32] * lambda[1, 1]  + S1[1:32,33:64] * lambda[2, 1]
+  K22[1:32,1:32] <- S1[1:32,1:32] * lambda[1, 2]  + S1[1:32,33:64] * lambda[2, 2]
+  K23[1:32,1:32] <- S1[1:32,1:32] * lambda[1, 3]  + S1[1:32,33:64] * lambda[2, 3]
+  b1[3:34] ~ dmnorm(zero[1:32], K21[1:32,1:32])
+  b2[3:34] ~ dmnorm(zero[1:32], K22[1:32,1:32])
+  b3[3:34] ~ dmnorm(zero[1:32], K23[1:32,1:32])
+
+  ## smoothing parameter priors
+  for (i in 1:2) {
+    for (kk in 1:3){
+      lambda[i, kk] ~ dgamma(.05,.005)
+      rho[i, kk] <- log(lambda[i, kk])
+    }
+  }
+  # detection probabilities (pA function of pres/abs of B, as in Waddle et al 2010 page 1470)
+  # VL: There are 2 detections probabilities now pA, pB
+
+  for(j in 1:nsite) {
+    B_present[j] <- equals(z[j],3) + equals(z[j],4) #psi[j, 3] + psi[j, 4]
+
+    for(k in 1:nyear) {
+      pA[j, k] <- (1/(1 + exp(-(beta[1] * B_present[j] + beta[2] * (1 - B_present[j]) + beta[3] * eff[j, k]))))*effind[j,k]
+
+      pB[j, k] <- (1/(1 + exp(-(beta[4] + beta[5] * eff[j, k]))))*effind[j,k]
+
+
+    }
+  }
+  for (i in 1:5){
+    beta[i] ~ dnorm(0,1)
+  }
+})
+
+```
+
+
+Then, you choose to prepare either SAMM or GDEGeM dataset for the run, ie. run only one of the next paragraph.
+
+### SAMM
+
+Get the ingredients for GAMs using package `jagam` developed by Simon Wood and basically hacks what is built by the package `mgcv`.
+
+```{r message=FALSE, warning=FALSE}
+yy_dolphinS <- apply(y2S, 1, max, na.rm = TRUE)
+yy_dolphinS[yy_dolphinS ==1] <- 0
+yy_dolphinS[yy_dolphinS >1] <- 1
+
+coordxS <- coordMaskS[,1]
+coordyS <- coordMaskS[,2]
+stbathyS <- mt$bathy.sc[!ind_effortS,1]
+library(mgcv)
+res <- jagam(yy_dolphinS ~ stbathyS + s(coordxS, coordyS, bs = "gp"), 
+             family = "binomial",
+             file = "psi.txt") # same structure for fishing boats and both together
+#save(res, file = 'jagam.RData')
+```
+
+```{r eval = FALSE, include=FALSE}
+# nimble
+y2S[is.na(y2S)] <-  1
+
+data <- list(y = y2S, 
+             eff = seffS,
+             effind = effindS,
+             X = res$jags.data$X, # gam para
+             S1 = res$jags.data$S1,
+             #S2 = res$jags.data$S2,
+             zero = res$jags.data$zero)
+
+constants <- list(nsite = dim(y2S)[1], 
+                  nyear = dim(y2S)[2])
+
+# Initial values for z {1:4} have to be consistent with the detection {1:16}
+
+zinit <- matrix(NA, nrow = dim(y2S)[1], ncol = dim(y2S)[2])
+zinit <- rep(1, dim(y2S)[1])
+
+y2S[is.na(y2S)] <- 1
+for (i in 1:dim(y2S)[1]){
+  d <- f <- b <- 0
+  for(j in 1:dim(y2S)[2]){
+    if (y2S[i,j] == 2) {d <- 1}
+    if (y2S[i,j] == 3) {f <- 1} 
+    if (y2S[i,j] == 4) {b <- 1}
+  } #j
+  if(d == 1 & f == 0 & b == 0) {zinit[i] <- 2}
+  if(d == 0 & f == 1 & b == 0) {zinit[i] <- 3}
+  if(b == 1) {zinit[i] <- 4}
+  if(d == 1 & f ==1) {zinit[i] <- 4}
+}#i
+
+# table
+table(zinit)
+
+inits <- list(z = zinit, 
+              beta = rnorm(5, 0, 1), 
+              lambda = cbind(res$jags.ini$lambda, res$jags.ini$lambda, res$jags.ini$lambda),
+              b1 = res$jags.ini$b,
+              b2 = res$jags.ini$b,
+              b3 = res$jags.ini$b)
+```
+
+
+### GDEGeM
+
+Get the ingredients for GAMs using package `jagam` developed by Simon Wood and basically hacks what is built by the package `mgcv`.
+
+```{r message=FALSE, warning=FALSE}
+yy_dolphinG <- apply(y2G, 1, max, na.rm = TRUE)
+yy_dolphinG[yy_dolphinG ==1] <- 0
+yy_dolphinG[yy_dolphinG >1] <- 1
+
+coordxG <- coordMaskG[,1]
+coordyG <- coordMaskG[,2]
+stbathyG <- mt$bathy.sc[!ind_effortG,1]
+library(mgcv)
+res <- jagam(yy_dolphinG ~ stbathyG + s(coordxG, coordyG, bs = "gp"), 
+             family = "binomial",
+             file = "psi.txt") # same structure for fishing boats and both together
+#save(res, file = 'jagam.RData')
+```
+
+```{r eval = FALSE, include=FALSE}
+# nimble
+y2G[is.na(y2G)] <-  1
+
+data <- list(y = y2G, 
+             eff = seffG,
+             effind = effindG,
+             X = res$jags.data$X, # gam para
+             S1 = res$jags.data$S1,
+             #S2 = res$jags.data$S2,
+             zero = res$jags.data$zero)
+
+constants <- list(nsite = dim(y2G)[1], 
+                  nyear = dim(y2G)[2])
+
+# Initial values for z {1:4} have to be consistent with the detection {1:16}
+
+zinit <- matrix(NA, nrow = dim(y2G)[1], ncol = dim(y2G)[2])
+zinit <- rep(1, dim(y2G)[1])
+
+y2G[is.na(y2G)] <- 1
+for (i in 1:dim(y2G)[1]){
+  d <- f <- b <- 0
+  for(j in 1:dim(y2G)[2]){
+    if (y2G[i,j] == 2) {d <- 1}
+    if (y2G[i,j] == 3) {f <- 1} 
+    if (y2G[i,j] == 4) {b <- 1}
+  } #j
+  if(d == 1 & f == 0 & b == 0) {zinit[i] <- 2}
+  if(d == 0 & f == 1 & b == 0) {zinit[i] <- 3}
+  if(b == 1) {zinit[i] <- 4}
+  if(d == 1 & f ==1) {zinit[i] <- 4}
+}#i
+
+# table
+table(zinit)
+
+inits <- list(z = zinit, 
+              beta = rnorm(5, 0, 1), 
+              lambda = cbind(res$jags.ini$lambda, res$jags.ini$lambda, res$jags.ini$lambda),
+              b1 = res$jags.ini$b,
+              b2 = res$jags.ini$b,
+              b3 = res$jags.ini$b)
+```
+
+
+
+
+## Build, compile and run model with NIMBLE
+
+```{r eval = FALSE, include=TRUE}
+Rmodel <- nimbleModel(IMSO, constants, data, inits)
+Rmodel$initializeInfo()
+Rmodel$calculate()
+
+conf <- configureMCMC(Rmodel)
+conf$printMonitors() 
+conf$addMonitors("z")
+
+conf$printSamplers(byType= TRUE)
+
+# Build and compile MCMC
+Rmcmc <- buildMCMC(conf)
+Cmodel <- compileNimble(Rmodel)
+Cmcmc <- compileNimble(Rmcmc, project = Cmodel)
+
+t <- system.time(samples2 <- runMCMC(Cmcmc, niter = 100000, nburnin = 10000, nchains = 3,
+                                     samplesAsCodaMCMC = TRUE))
+```
